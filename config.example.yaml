@@ -1,0 +1,37 @@
+service_name: "VCPToolBoxAutoUpdater"
+display_name: "VCP ToolBox Auto Updater"
+description: "Automatically pulls VCPToolBox updates and restarts PM2 process."
+
+log_level: INFO
+log_file: "F:\\AI_Study_studio\\VCPToolBox\\vcptoolbox-auto-updater\\logs"
+
+git:
+  repo_path: "F:/AI_Study_studio/VCPToolBox"
+  remote_name: "lionsky"
+  branch: "master"
+  check_interval_hours: 24.0
+
+pm2:
+  process_name: "vcp-admin vcp-main" #不同进程名使用空格隔开
+
+notifications:
+  feishu:
+    enabled: false
+    app_id: "cli_xxxxxxxx"
+    app_secret: "xxxxxxxx"
+    receive_id: "ou_xxxxxxxx"
+    receive_id_type: "open_id"
+
+  wecom:
+    enabled: false
+    webhook_url: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxxxxxx"
+
+  email:
+    enabled: false
+    smtp_host: "smtp.gmail.com"
+    smtp_port: 587
+    username: "your-bot@gmail.com"
+    password: "your-app-password"
+    to_addrs:
+      - "admin@example.com"
+    use_tls: true

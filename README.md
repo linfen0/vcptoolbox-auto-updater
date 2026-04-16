@@ -6,8 +6,8 @@
 
 - **Windows 服务形态**：开机自启，崩溃自动恢复
 - **定时检测**：默认每 24 小时检测一次远程提交
-- **远程优先合并**：本地冲突时执行 `git reset --hard origin/<branch>`
-- **PM2 自动重启**：更新成功后自动调用 `pm2 restart`
+- **远程优先合并**：自动将本地更改与远程合并，冲突时以远程版本为准（`git merge -X theirs origin/<branch>`）
+- **PM2 自动托管**：更新成功后自动调用 `pm2 startOrRestart`，按配置启动或重启指定仓库内的所有 Node.js 服务
 - **多通道通知**：飞书（官方 SDK）、企业微信（Webhook）、邮件（SMTP）
 - **手动更新 CLI**：支持命令行手动触发单次更新
 
@@ -55,11 +55,22 @@ uv sync
 ```yaml
 git:
   repo_path: "F:/AI_Study_studio/VCPToolBox"
-  remote_name: \"origin\"
-  branch: \"main\"
+  remote_name: "origin"
+  branch: "main"
 
 pm2:
-  process_name: \"vcptoolbox\"
+  processes:
+    - name: "vcp-main"
+      script: "server.js"
+      watch: false
+      max_memory_restart: "1500M"
+      kill_timeout: 15000
+
+    - name: "vcp-admin"
+      script: "adminServer.js"
+      watch: false
+      max_memory_restart: "512M"
+      kill_timeout: 5000
 ```
 
 ### 3. 安装为 Windows 服务
@@ -98,6 +109,6 @@ uv run python -m vcptoolbox_updater uninstall
 
 ## 注意事项
 
-- 冲突解决策略为 **hard reset**，本地未提交的更改会被自动 stash
+- 冲突解决策略为 **merge preferring remote**，本地未提交的更改会先自动 commit 保留，然后再与远程合并
 - 服务运行日志默认写入 Windows EventLog，可在 `config.yaml` 中配置 `log_file`
 - 需要系统已安装 `git` 和 `pm2`，且 `pm2` 在系统 PATH 中可用

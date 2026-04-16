@@ -17,9 +17,41 @@ class GitConfig(BaseSettings):
     check_interval_hours: float = Field(default=24.0, ge=0.1, description="检查间隔小时数")
 
 
+class Pm2ProcessConfig(BaseSettings):
+    name: str = Field(description="PM2 进程名称")
+    script: str = Field(description="启动脚本路径")
+    watch: bool = Field(default=False, description="是否启用 watch 模式")
+    max_memory_restart: str | None = Field(default=None, description="最大内存限制")
+    kill_timeout: int | None = Field(default=None, description="终止超时时间（毫秒）")
+    cwd: str | None = Field(default=None, description="工作目录，默认使用 repo_path")
+    args: list[str] | None = Field(default=None, description="传递给脚本的额外参数")
+    env: dict[str, str] | None = Field(default=None, description="环境变量")
+    instances: int | str | None = Field(default=None, description="实例数")
+    exec_mode: str | None = Field(default=None, description="执行模式，如 cluster/fork")
+    log_file: str | None = Field(default=None, description="日志文件路径")
+    error_file: str | None = Field(default=None, description="错误日志文件路径")
+    out_file: str | None = Field(default=None, description="标准输出日志文件路径")
+    merge_logs: bool | None = Field(default=None, description="是否合并日志")
+    autorestart: bool | None = Field(default=None, description="是否自动重启")
+    min_uptime: str | None = Field(default=None, description="最小运行时间")
+    max_restarts: int | None = Field(default=None, description="最大重启次数")
+    restart_delay: int | None = Field(default=None, description="重启延迟（毫秒）")
+
+    def to_ecosystem_dict(self) -> dict:
+        """Convert this process config to a PM2 ecosystem app dict."""
+        data = self.model_dump(exclude_none=True)
+        if self.args:
+            data["args"] = " ".join(self.args)
+        return data
+
+
 class Pm2Config(BaseSettings):
-    process_name: str = Field(description="PM2 进程名称")
     pm2_bin: str | None = Field(default=None, description="PM2 可执行文件路径，默认从 PATH 查找")
+    processes: list[Pm2ProcessConfig] = Field(description="PM2 进程配置列表")
+
+    def to_ecosystem_dict(self) -> dict:
+        """Convert all process configs to a single PM2 ecosystem dict."""
+        return {"apps": [proc.to_ecosystem_dict() for proc in self.processes]}
 
 
 class FeishuConfig(BaseSettings):

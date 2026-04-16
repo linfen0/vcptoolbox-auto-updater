@@ -1,4 +1,4 @@
-"""Git operations: fetch, compare, hard-reset merge."""
+"""Git operations: fetch, compare, and merge preferring remote on conflicts."""
 
 from __future__ import annotations
 
@@ -57,6 +57,19 @@ class GitOperator:
                 message="Already up to date.",
             )
 
+        # Check whether remote is an ancestor of local (i.e. local already contains all remote commits)
+        ancestor_result = self._run(
+            ["merge-base", "--is-ancestor", self.remote_ref, self.branch],
+            check=False,
+        )
+        if ancestor_result.returncode == 0:
+            return GitUpdateResult(
+                updated=False,
+                local_commit=local_commit,
+                remote_commit=remote_commit,
+                message="Local is ahead of remote. No update needed.",
+            )
+
         try:
             count_result = self._run(
                 ["rev-list", "--count", f"{self.branch}..{self.remote_ref}"]
@@ -81,22 +94,42 @@ class GitOperator:
             return result
 
         status_result = self._run(["status", "--porcelain"], check=False)
-        if status_result.stdout.strip():
-            logger.warning("local_changes_detected_stashing")
-            self._run(["stash", "push", "-m", "auto-updater-stash"], check=False)
+        tracked_changes = [line for line in status_result.stdout.strip().splitlines() if line and not line.startswith("?")]
+        untracked_files = [line[3:].strip() for line in status_result.stdout.strip().splitlines() if line.startswith("?")]
 
-        reset_result = self._run(["reset", "--hard", self.remote_ref])
-        logger.info(
-            "git_hard_reset_completed",
-            from_commit=result.local_commit,
-            to_commit=result.remote_commit,
-            stdout=reset_result.stdout.strip(),
+        if tracked_changes:
+            logger.warning("local_changes_detected_committing", file_count=len(tracked_changes))
+            self._run(["add", "-u"])
+            self._run(["commit", "-m", "auto-updater: preserve local changes"])
+
+        if untracked_files:
+            logger.warning("untracked_files_detected", file_count=len(untracked_files), files=untracked_files)
+
+        merge_result = self._run(
+            ["merge", "-X", "theirs", self.remote_ref],
+            check=False,
         )
+        if merge_result.returncode != 0:
+            logger.warning(
+                "merge_conflicts_detected_preferring_remote",
+                stdout=merge_result.stdout.strip(),
+                stderr=merge_result.stderr.strip(),
+            )
+            self._run(["checkout", "--theirs", "."])
+            self._run(["add", "-u"])
+            self._run(["commit", "-m", f"Merge {self.remote_ref} (prefer remote changes)"])
+        else:
+            logger.info(
+                "git_merge_completed",
+                from_commit=result.local_commit,
+                to_commit=result.remote_commit,
+                stdout=merge_result.stdout.strip(),
+            )
 
         post_local = self.get_commit_hash(self.branch)
         return GitUpdateResult(
             updated=True,
             local_commit=pre_local,
             remote_commit=post_local,
-            message=f"Hard reset from {pre_local} to {post_local}.",
+            message=f"Merged from {pre_local} to {post_local} (remote preferred on conflicts).",
         )

@@ -12,7 +12,20 @@ git:
   check_interval_hours: 24.0
 
 pm2:
-  process_name: "vcp-admin vcp-main" #不同进程名使用空格隔开
+    processes:
+
+    - name: "vcp-main"
+      script: "server.js"
+      watch: false
+      max_memory_restart: "1500M"
+      kill_timeout: 15000
+
+    - name: "vcp-admin"
+      script: "adminServer.js"
+      watch: false
+      max_memory_restart: "512M"
+      kill_timeout: 5000
+
 
 notifications:
   feishu:

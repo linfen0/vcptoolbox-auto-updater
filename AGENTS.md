@@ -4,7 +4,7 @@
 
 ## 项目概览
 
-VCPToolBox Auto Updater 是一个基于 Python 的 Windows 后台服务，用于 7×24 小时自动检测 VCPToolBox 远程 Git 仓库的更新。当检测到新提交时，它会以远程版本强制覆盖本地冲突（`git reset --hard origin/<branch>`），并在更新成功后自动重启指定的 PM2 进程。
+VCPToolBox Auto Updater 是一个基于 Python 的 Windows 后台服务，用于 7×24 小时自动检测 VCPToolBox 远程 Git 仓库的更新。当检测到新提交时，它会自动将本地更改与远程合并，冲突时以远程版本为准（`git merge -X theirs origin/<branch>`），并在更新成功后自动重启指定的 PM2 进程。
 
 - **名称**：`vcptoolbox-updater`（PyPI/包名）
 - **版本**：1.0.0
@@ -64,7 +64,7 @@ vcptoolbox-auto-updater/
 |:---|:---|
 | `cli.py` | CLI 入口。`service` 命令供 SCM 调用；`update` 命令支持手动触发单次更新周期。 |
 | `service.py` | Windows Service 生命周期管理：`SvcDoRun` 加载配置、启动 scheduler、立即执行一次 job，随后进入等待循环；`SvcStop` 优雅停止 scheduler 并设置 stop event。 |
-| `git_ops.py` | 封装原生 `git` 子进程调用。核心策略：**hard reset**。本地有未提交更改时会先自动 `git stash push`。 |
+| `git_ops.py` | 封装原生 `git` 子进程调用。核心策略：**merge preferring remote**（`git merge -X theirs`）。本地有未提交更改时会先自动 `git commit` 保留，然后再执行 merge；若存在结构性冲突，则执行 `git checkout --theirs .` 强制以远程为准。 |
 | `pm2_ops.py` | 封装 `pm2` 子进程调用，自动在 PATH 中查找 `pm2` 可执行文件。 |
 | `scheduler.py` | 基于 `IntervalTrigger(hours=...)` 的后台定时任务封装。 |
 | `config.py` | 使用 `pydantic_settings.BaseSettings` 定义分层配置模型，支持从 YAML 反序列化。 |
@@ -126,7 +126,7 @@ uv run python -m vcptoolbox_updater uninstall
 2. **更新周期**（`job()` / `cli.py update`）：
    - `git fetch`
    - 比较 `HEAD` 与 `origin/<branch>`
-   - 如有更新：stash 本地更改 → `git reset --hard origin/<branch>` → `pm2 restart <process_name>`
+   - 如有更新：自动 commit 本地更改 → `git merge -X theirs origin/<branch>`（冲突时强制以远程为准） → `pm2 restart <process_name>`
    - 发送通知报告（成功/失败）
 
 ## 配置说明
@@ -161,7 +161,7 @@ notifications:
 
 ## 安全与风险提醒
 
-- **Hard Reset 策略**：`git_ops.py` 使用 `git reset --hard origin/<branch>`。本地所有未提交的修改都会被覆盖。虽然代码会先尝试 `git stash push`，但**不要假设 stash 一定成功或可被恢复**。
+- **Merge Preferring Remote 策略**：`git_ops.py` 使用 `git merge -X theirs origin/<branch>` 合并远程更改；若存在结构性冲突，则执行 `git checkout --theirs .` 强制以远程为准。本地有未提交更改时会先自动 `git commit` 保留，使其作为独立 commit 参与 merge。
 - **子进程执行**：Git 与 PM2 操作均通过 `subprocess.run(..., check=True)` 调用外部命令。输入参数来自配置文件，未对用户输入做转义过滤（当前场景下可控）。
 - **敏感信息**：`config.yaml` 包含 `app_secret`、`password`、`webhook_url`。请勿将其提交到版本控制。
 - **权限**：Windows 服务安装与运行需要管理员权限。`install_service.ps1` 顶部包含 `#Requires -RunAsAdministrator`。

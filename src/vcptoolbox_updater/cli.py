@@ -91,7 +91,10 @@ def update(ctx: click.Context) -> None:
         remote_name=cfg.git.remote_name,
         branch=cfg.git.branch,
     )
-    pm2_op = Pm2Operator(process_name=cfg.pm2.process_name, pm2_bin=cfg.pm2.pm2_bin)
+    pm2_op = Pm2Operator(
+        pm2_bin=cfg.pm2.pm2_bin,
+        pm2_cfg=cfg.pm2,
+    )
     notifiers = build_notifiers(cfg.notifications)
 
     report: UpdateReport | None = None
@@ -105,7 +108,7 @@ def update(ctx: click.Context) -> None:
                 branch=cfg.git.branch,
                 from_commit=git_result.local_commit,
                 to_commit=git_result.remote_commit,
-                pm2_process=cfg.pm2.process_name,
+                pm2_process=", ".join(p.name for p in cfg.pm2.processes),
                 pm2_output="No restart needed.",
                 message="No new commits on remote.",
             )
@@ -119,7 +122,7 @@ def update(ctx: click.Context) -> None:
                 branch=cfg.git.branch,
                 from_commit=git_result.local_commit,
                 to_commit=git_result.remote_commit,
-                pm2_process=cfg.pm2.process_name,
+                pm2_process=", ".join(p.name for p in cfg.pm2.processes),
                 pm2_output=pm2_output,
                 message=git_result.message,
             )
@@ -131,7 +134,7 @@ def update(ctx: click.Context) -> None:
             branch=cfg.git.branch,
             from_commit="unknown",
             to_commit="unknown",
-            pm2_process=cfg.pm2.process_name,
+            pm2_process=", ".join(p.name for p in cfg.pm2.processes),
             pm2_output="",
             message=f"Error: {exc}",
         )

@@ -30,7 +30,7 @@ def _make_mock_cfg():
     mock_cfg.git.remote_name = "origin"
     mock_cfg.git.branch = "main"
     mock_cfg.git.check_interval_hours = 24.0
-    mock_cfg.pm2.process_name = "test-app"
+    mock_cfg.pm2.processes = []
     mock_cfg.pm2.pm2_bin = None
     mock_cfg.notifications.feishu.enabled = False
     mock_cfg.notifications.wecom.enabled = False

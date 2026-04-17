@@ -70,12 +70,12 @@ class AutoUpdaterService(win32serviceutil.ServiceFramework):
         logger.info(
             "service_started",
             config_path=self.config_path,
-            repo_path=str(cfg.git.repo_path),
+            repo_path=str(cfg.repo_path),
             branch=cfg.git.branch,
         )
 
         git_op = GitOperator(
-            repo_path=str(cfg.git.repo_path),
+            repo_path=str(cfg.repo_path),
             remote_name=cfg.git.remote_name,
             branch=cfg.git.branch,
         )
@@ -119,7 +119,7 @@ class AutoUpdaterService(win32serviceutil.ServiceFramework):
                 logger.info("no_update_needed", local_commit=git_result.local_commit)
                 report = UpdateReport(
                     success=True,
-                    repo_path=str(cfg.git.repo_path),
+                    repo_path=str(cfg.repo_path),
                     branch=cfg.git.branch,
                     from_commit=git_result.local_commit,
                     to_commit=git_result.remote_commit,
@@ -128,10 +128,10 @@ class AutoUpdaterService(win32serviceutil.ServiceFramework):
                     message="No new commits on remote.",
                 )
             else:
-                pm2_output = pm2_op.restart(cwd=str(cfg.git.repo_path))
+                pm2_output = pm2_op.restart(cwd=str(cfg.repo_path))
                 report = UpdateReport(
                     success=True,
-                    repo_path=str(cfg.git.repo_path),
+                    repo_path=str(cfg.repo_path),
                     branch=cfg.git.branch,
                     from_commit=git_result.local_commit,
                     to_commit=git_result.remote_commit,
@@ -144,7 +144,7 @@ class AutoUpdaterService(win32serviceutil.ServiceFramework):
             logger.exception("update_failed", error=str(exc))
             report = UpdateReport(
                 success=False,
-                repo_path=str(cfg.git.repo_path),
+                repo_path=str(cfg.repo_path),
                 branch=cfg.git.branch,
                 from_commit="unknown",
                 to_commit="unknown",

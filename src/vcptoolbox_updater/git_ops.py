@@ -28,14 +28,22 @@ class GitOperator:
     def _run(self, cmd: list[str], cwd: str | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
         full_cmd = ["git", *cmd]
         logger.debug("running_git_command", command=" ".join(full_cmd), cwd=cwd or self.repo_path)
-        return subprocess.run(
+        result = subprocess.run(
             full_cmd,
             cwd=cwd or self.repo_path,
             capture_output=True,
             text=True,
             encoding="utf-8",
-            check=check,
+            check=False,
         )
+        if check and result.returncode != 0:
+            err_msg = result.stderr.strip() or "(no stderr output)"
+            raise RuntimeError(
+                f"Git command failed in {cwd or self.repo_path}: "
+                f"{' '.join(full_cmd)}\n"
+                f"Error: {err_msg}"
+            )
+        return result
 
     def fetch(self) -> None:
         result = self._run(["fetch", self.remote_name])
@@ -85,13 +93,36 @@ class GitOperator:
             message=f"Behind by {behind_count} commit(s).",
         )
 
+    def is_detached_head(self) -> bool:
+        result = self._run(["rev-parse", "--abbrev-ref", "HEAD"])
+        return result.stdout.strip() == "HEAD"
+
+    def checkout_branch(self) -> None:
+        self._run(["checkout", self.branch])
+        logger.info("checked_out_branch", branch=self.branch)
+
     def pull_and_resolve_conflicts(self) -> GitUpdateResult:
         pre_local = self.get_commit_hash(self.branch)
         self.fetch()
 
+        detached = False
+        if self.is_detached_head():
+            logger.warning("detached_head_detected", branch=self.branch)
+            self.checkout_branch()
+            pre_local = self.get_commit_hash(self.branch)
+            detached = True
+
         result = self.check_update_needed()
-        if not result.updated:
+        if not result.updated and not detached:
             return result
+
+        if not result.updated and detached:
+            return GitUpdateResult(
+                updated=True,
+                local_commit=pre_local,
+                remote_commit=pre_local,
+                message="Detached HEAD fixed, no new commits. Restart required.",
+            )
 
         status_result = self._run(["status", "--porcelain"], check=False)
         tracked_changes = [line for line in status_result.stdout.strip().splitlines() if line and not line.startswith("?")]

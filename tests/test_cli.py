@@ -26,7 +26,7 @@ def test_resolve_config_path_default():
 
 def _make_mock_cfg():
     mock_cfg = MagicMock()
-    mock_cfg.git.repo_path = Path("/tmp/repo")
+    mock_cfg.repo_path = Path("/tmp/repo")
     mock_cfg.git.remote_name = "origin"
     mock_cfg.git.branch = "main"
     mock_cfg.git.check_interval_hours = 24.0
@@ -55,7 +55,7 @@ def test_cli_update_no_update():
         mock_git_op_cls.return_value = mock_git_op
         result = runner.invoke(cli, ["--config", "/tmp/cfg.yaml", "update"])
         assert result.exit_code == 0
-        assert "No update needed" in result.output
+        assert "No new commits on remote" in result.output
 
 
 def test_cli_update_with_update():

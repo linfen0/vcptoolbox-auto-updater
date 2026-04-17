@@ -9,9 +9,9 @@ import click
 
 from vcptoolbox_updater.config import load_config
 from vcptoolbox_updater.git_ops import GitOperator
-from vcptoolbox_updater.notifications import UpdateReport, build_notifiers
+from vcptoolbox_updater.update_report import UpdateReport
 from vcptoolbox_updater.pm2_ops import Pm2Operator
-from vcptoolbox_updater.service import AutoUpdaterService
+
 from vcptoolbox_updater.utils import configure_logging, get_logger
 
 logger = get_logger(__name__)
@@ -37,7 +37,9 @@ def cli(ctx: click.Context, config: str | None) -> None:
 @click.pass_context
 def service(ctx: click.Context) -> None:
     """Run as a Windows service (used by SCM)."""
+    from vcptoolbox_updater.service import AutoUpdaterService
     if len(sys.argv) == 1:
+        import servicemanager
         servicemanager.Initialize()
         servicemanager.PrepareToHostSingle(AutoUpdaterService)
         servicemanager.StartServiceCtrlDispatcher()
@@ -50,6 +52,7 @@ def service(ctx: click.Context) -> None:
 @click.pass_context
 def install(ctx: click.Context) -> None:
     """Install the Windows service."""
+    from vcptoolbox_updater.service import AutoUpdaterService
     import win32serviceutil
     win32serviceutil.HandleCommandLine(AutoUpdaterService, argv=["", "install"])
 
@@ -58,6 +61,7 @@ def install(ctx: click.Context) -> None:
 @click.pass_context
 def uninstall(ctx: click.Context) -> None:
     """Remove the Windows service."""
+    from vcptoolbox_updater.service import AutoUpdaterService
     import win32serviceutil
     win32serviceutil.HandleCommandLine(AutoUpdaterService, argv=["", "remove"])
 
@@ -66,6 +70,7 @@ def uninstall(ctx: click.Context) -> None:
 @click.pass_context
 def start(ctx: click.Context) -> None:
     """Start the Windows service."""
+    from vcptoolbox_updater.service import AutoUpdaterService
     import win32serviceutil
     win32serviceutil.HandleCommandLine(AutoUpdaterService, argv=["", "start"])
 
@@ -74,20 +79,18 @@ def start(ctx: click.Context) -> None:
 @click.pass_context
 def stop(ctx: click.Context) -> None:
     """Stop the Windows service."""
+    from vcptoolbox_updater.service import AutoUpdaterService
     import win32serviceutil
     win32serviceutil.HandleCommandLine(AutoUpdaterService, argv=["", "stop"])
 
 
-@cli.command()
-@click.pass_context
-def update(ctx: click.Context) -> None:
-    """Manually trigger a single update cycle now."""
-    config_path = ctx.obj["config_path"]
+def execute_update(config_path: str, service_mode: bool = False) -> UpdateReport:
+    """Run a single update cycle and return the report."""
     cfg = load_config(config_path)
-    configure_logging(cfg.log_level, str(cfg.log_file) if cfg.log_file else None, service_mode=False)
+    configure_logging(cfg.log_level, str(cfg.log_file) if cfg.log_file else None, service_mode=service_mode)
 
     git_op = GitOperator(
-        repo_path=str(cfg.git.repo_path),
+        repo_path=str(cfg.repo_path),
         remote_name=cfg.git.remote_name,
         branch=cfg.git.branch,
     )
@@ -95,16 +98,17 @@ def update(ctx: click.Context) -> None:
         pm2_bin=cfg.pm2.pm2_bin,
         pm2_cfg=cfg.pm2,
     )
+    from vcptoolbox_updater.notifications import build_notifiers
+
     notifiers = build_notifiers(cfg.notifications)
 
     report: UpdateReport | None = None
     try:
         git_result = git_op.pull_and_resolve_conflicts()
         if not git_result.updated:
-            click.echo("No update needed.")
             report = UpdateReport(
                 success=True,
-                repo_path=str(cfg.git.repo_path),
+                repo_path=str(cfg.repo_path),
                 branch=cfg.git.branch,
                 from_commit=git_result.local_commit,
                 to_commit=git_result.remote_commit,
@@ -113,12 +117,10 @@ def update(ctx: click.Context) -> None:
                 message="No new commits on remote.",
             )
         else:
-            click.echo(f"Updated: {git_result.local_commit} -> {git_result.remote_commit}")
-            pm2_output = pm2_op.restart(cwd=str(cfg.git.repo_path))
-            click.echo(f"PM2 restart output:\n{pm2_output}")
+            pm2_output = pm2_op.restart(cwd=str(cfg.repo_path))
             report = UpdateReport(
                 success=True,
-                repo_path=str(cfg.git.repo_path),
+                repo_path=str(cfg.repo_path),
                 branch=cfg.git.branch,
                 from_commit=git_result.local_commit,
                 to_commit=git_result.remote_commit,
@@ -127,10 +129,9 @@ def update(ctx: click.Context) -> None:
                 message=git_result.message,
             )
     except Exception as exc:
-        click.echo(f"Update failed: {exc}", err=True)
         report = UpdateReport(
             success=False,
-            repo_path=str(cfg.git.repo_path),
+            repo_path=str(cfg.repo_path),
             branch=cfg.git.branch,
             from_commit="unknown",
             to_commit="unknown",
@@ -142,9 +143,26 @@ def update(ctx: click.Context) -> None:
     for notifier in notifiers:
         try:
             notifier.send(report)
-            click.echo(f"Notification sent via {notifier.__class__.__name__}")
-        except Exception as exc:
-            click.echo(f"Notification failed: {exc}", err=True)
+        except Exception:
+            pass
+
+    return report
+
+
+@cli.command()
+@click.pass_context
+def update(ctx: click.Context) -> None:
+    """Manually trigger a single update cycle now."""
+    config_path = ctx.obj["config_path"]
+    report = execute_update(config_path)
+    if report.success:
+        if "Error:" in report.message:
+            click.echo(report.message)
+        else:
+            click.echo(f"Update completed. {report.message}")
+            click.echo(f"PM2: {report.pm2_output}")
+    else:
+        click.echo(f"Update failed: {report.message}", err=True)
 
 
 def main() -> None:

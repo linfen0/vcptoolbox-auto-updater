@@ -13,10 +13,12 @@ dependencies = [
     "click>=8.1.0",
     "lark-oapi>=1.4.0",
     "requests>=2.32.0",
+    "textual>=8.2.3",
 ]
 
 [project.scripts]
 vcptoolbox-updater = "vcptoolbox_updater.cli:main"
+vcptoolbox-updater-tui = "vcptoolbox_updater.tui:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -26,4 +28,7 @@ build-backend = "hatchling.build"
 packages = ["src/vcptoolbox_updater"]
 
 [dependency-groups]
-dev = ["pytest>=8.0"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=1.3.0",
+]

@@ -5,10 +5,11 @@ description: "Automatically pulls VCPToolBox updates and restarts PM2 process."
 log_level: INFO
 log_file: "F:\\AI_Study_studio\\VCPToolBox\\vcptoolbox-auto-updater\\logs"
 
+repo_path: "F:/AI_Study_studio/VCPToolBox"
+
 git:
-  repo_path: "F:/AI_Study_studio/VCPToolBox"
   remote_name: "lionsky"
-  branch: "master"
+  branch: "main"
   check_interval_hours: 24.0
 
 pm2:

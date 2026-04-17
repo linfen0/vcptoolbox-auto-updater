@@ -94,10 +94,53 @@ def test_pull_and_resolve_conflicts_no_update():
     mock_result.local_commit = "abc1234"
     mock_result.remote_commit = "abc1234"
     with patch.object(op, "fetch") as mock_fetch, \
+         patch.object(op, "is_detached_head", return_value=False), \
          patch.object(op, "check_update_needed", return_value=mock_result), \
          patch.object(op, "get_commit_hash", return_value="abc1234"):
         result = op.pull_and_resolve_conflicts()
         assert not result.updated
+        mock_fetch.assert_called_once()
+
+
+def test_pull_and_resolve_conflicts_detached_head_with_update():
+    op = GitOperator("/tmp/repo", "origin", "main")
+    mock_result = MagicMock()
+    mock_result.updated = True
+    mock_result.local_commit = "abc1234"
+    mock_result.remote_commit = "def5678"
+
+    with patch.object(op, "fetch") as mock_fetch, \
+         patch.object(op, "is_detached_head", return_value=True), \
+         patch.object(op, "checkout_branch") as mock_checkout, \
+         patch.object(op, "check_update_needed", return_value=mock_result), \
+         patch.object(op, "_run", return_value=MagicMock(stdout="", returncode=0)) as mock_run, \
+         patch.object(op, "get_commit_hash", return_value="def5678"):
+        result = op.pull_and_resolve_conflicts()
+        assert result.updated
+        mock_checkout.assert_called_once()
+        mock_fetch.assert_called_once()
+        mock_run.assert_any_call(["status", "--porcelain"], check=False)
+        mock_run.assert_any_call(["merge", "-X", "theirs", "origin/main"], check=False)
+
+
+def test_pull_and_resolve_conflicts_detached_head_no_update_still_restart():
+    op = GitOperator("/tmp/repo", "origin", "main")
+    mock_result = MagicMock()
+    mock_result.updated = False
+    mock_result.local_commit = "abc1234"
+    mock_result.remote_commit = "abc1234"
+
+    with patch.object(op, "fetch") as mock_fetch, \
+         patch.object(op, "is_detached_head", return_value=True), \
+         patch.object(op, "checkout_branch") as mock_checkout, \
+         patch.object(op, "check_update_needed", return_value=mock_result), \
+         patch.object(op, "get_commit_hash", return_value="abc1234"):
+        result = op.pull_and_resolve_conflicts()
+        assert result.updated is True
+        assert result.local_commit == "abc1234"
+        assert result.remote_commit == "abc1234"
+        assert "Detached HEAD fixed" in result.message
+        mock_checkout.assert_called_once()
         mock_fetch.assert_called_once()
 
 

@@ -61,7 +61,7 @@ class Pm2Operator:
         if not self.pm2_cfg or not self.pm2_cfg.processes:
             raise RuntimeError("No PM2 processes configured.")
 
-        ecosystem = self.pm2_cfg.to_ecosystem_dict()
+        ecosystem = self.pm2_cfg.to_ecosystem_dict(default_cwd=cwd)
         return _start_or_restart(self.pm2_bin, ecosystem, cwd=cwd)
 
     def save(self) -> None:

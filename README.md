@@ -5,10 +5,15 @@
 ## 功能特性
 
 - **Windows 服务形态**：开机自启，崩溃自动恢复
+
 - **定时检测**：默认每 24 小时检测一次远程提交
-- **远程优先合并**：自动将本地更改与远程合并，冲突时以远程版本为准（`git merge -X theirs origin/<branch>`）
-- **PM2 自动托管**：更新成功后自动调用 `pm2 startOrRestart`，按配置启动或重启指定仓库内的所有 Node.js 服务
+
+- **远程优先合并**：自动将本地更改与远程合并，冲突时以远程版本为准（`git merge -X theirs origin/<branch> + git checkout --theirs .`）
+
+- **PM2 自动托管**： 自动使用 `pm2 startOrRestart`，遵照PM2的最佳实践，由config.yaml生成ecosystem.json管理指定本地文件夹内的所有 Node.js 服务
+
 - **多通道通知**：飞书（官方 SDK）、企业微信（Webhook）、邮件（SMTP）
+
 - **手动更新 CLI**：支持命令行手动触发单次更新
 
 ## 项目结构
@@ -53,8 +58,9 @@ uv sync
 编辑 `config.yaml`，至少修改以下字段：
 
 ```yaml
+repo_path: "F:/AI_Study_studio/VCPToolBox"
+
 git:
-  repo_path: "F:/AI_Study_studio/VCPToolBox"
   remote_name: "origin"
   branch: "main"
 

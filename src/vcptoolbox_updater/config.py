@@ -11,7 +11,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class GitConfig(BaseSettings):
-    repo_path: Path = Field(description="本地仓库绝对路径")
     remote_name: str = Field(default="origin", description="远程仓库名称")
     branch: str = Field(default="main", description="目标分支")
     check_interval_hours: float = Field(default=24.0, ge=0.1, description="检查间隔小时数")
@@ -49,9 +48,18 @@ class Pm2Config(BaseSettings):
     pm2_bin: str | None = Field(default=None, description="PM2 可执行文件路径，默认从 PATH 查找")
     processes: list[Pm2ProcessConfig] = Field(description="PM2 进程配置列表")
 
-    def to_ecosystem_dict(self) -> dict:
-        """Convert all process configs to a single PM2 ecosystem dict."""
-        return {"apps": [proc.to_ecosystem_dict() for proc in self.processes]}
+    def to_ecosystem_dict(self, default_cwd: str | None = None) -> dict:
+        """Convert all process configs to a single PM2 ecosystem dict.
+
+        If a process does not define its own cwd, default_cwd is injected.
+        """
+        apps = []
+        for proc in self.processes:
+            app = proc.to_ecosystem_dict()
+            if default_cwd is not None and app.get("cwd") is None:
+                app["cwd"] = default_cwd
+            apps.append(app)
+        return {"apps": apps}
 
 
 class FeishuConfig(BaseSettings):
@@ -90,6 +98,7 @@ class ServiceConfig(BaseSettings):
     display_name: str = "VCP ToolBox Auto Updater"
     description: str = "Automatically pulls VCPToolBox updates and restarts PM2 process."
 
+    repo_path: Path = Field(description="本地仓库绝对路径，Git 与 PM2 共用")
     git: GitConfig
     pm2: Pm2Config
     notifications: NotificationConfig = Field(default_factory=NotificationConfig)
@@ -102,6 +111,7 @@ class ServiceConfig(BaseSettings):
         return Path(v).expanduser() if v else None
 
 
-def load_config(path: Path) -> ServiceConfig:
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+def load_config(path: str | Path) -> ServiceConfig:
+    p = Path(path)
+    raw = yaml.safe_load(p.read_text(encoding="utf-8"))
     return ServiceConfig(**raw)

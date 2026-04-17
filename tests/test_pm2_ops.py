@@ -25,7 +25,7 @@ def test_restart_runs_start_or_restart_for_all_processes():
     op = pm2_ops.Pm2Operator(pm2_bin="pm2", pm2_cfg=cfg)
     with patch.object(pm2_ops, "_start_or_restart", return_value="[PM2] all ok") as mock_sor:
         output = op.restart(cwd="/tmp/repo")
-        mock_sor.assert_called_once_with("pm2", cfg.to_ecosystem_dict(), cwd="/tmp/repo")
+        mock_sor.assert_called_once_with("pm2", cfg.to_ecosystem_dict(default_cwd="/tmp/repo"), cwd="/tmp/repo")
         assert output == "[PM2] all ok"
 
 

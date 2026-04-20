@@ -4,7 +4,7 @@
 
 ## 项目概览
 
-VCPToolBox Auto Updater 是一个基于 Python 的 Windows 后台服务，用于 7×24 小时自动检测 VCPToolBox 远程 Git 仓库的更新。当检测到新提交时，它会自动将本地更改与远程合并，冲突时以远程版本为准（`git merge -X theirs origin/<branch>`），并在更新成功后自动重启指定的 PM2 进程。
+VCPToolBox Auto Updater 是一个基于 Python 的 Windows 后台服务，用于 7×24 小时自动检测 VCPToolBox 远程 Git 仓库的更新。当检测到新提交时，它会将本地 tracked 修改 stash、硬同步到远程（`git reset --hard origin/<branch>`），然后应用 stash 并丢弃 stash 中的修改/删除（保留新增文件），最后在更新成功后自动重启指定的 PM2 进程。
 
 - **名称**：`vcptoolbox-updater`（PyPI/包名）
 - **版本**：1.0.0
@@ -36,26 +36,33 @@ vcptoolbox-auto-updater/
 ├── README.md               # 面向人类的中文文档
 ├── scripts/
 │   └── install_service.ps1 # 以管理员身份安装 Windows 服务的 PowerShell 脚本
-├── src/                    # Python 源码实际存放目录
+├── src/vcptoolbox_updater/ # Python 源码实际存放目录
 │   ├── __init__.py
 │   ├── __main__.py         # python -m vcptoolbox_updater 入口
 │   ├── cli.py              # click CLI：service / install / uninstall / start / stop / update
 │   ├── config.py           # Pydantic 配置模型与 YAML 加载
-│   ├── git_ops.py          # GitOperator：fetch、rev-parse、hard-reset
-│   ├── pm2_ops.py          # Pm2Operator：restart、save
+│   ├── git_ops.py          # GitOperator：fetch、rev-parse、hard-reset、stash/reconcile
+│   ├── pm2_ops.py          # Pm2Operator：startOrRestart、save，支持多进程 ecosystem
 │   ├── scheduler.py        # UpdateScheduler：APScheduler BackgroundScheduler 封装
 │   ├── service.py          # AutoUpdaterService：pywin32 Windows Service 实现
+│   ├── update_report.py    # UpdateReport dataclass：更新结果数据结构
 │   ├── utils.py            # structlog 初始化与日志处理器（文件 / EventLog）
 │   └── notifications/      # 通知通道实现
 │       ├── __init__.py     # 工厂函数 build_notifiers
-│       ├── base.py         # NotificationChannel ABC + UpdateReport dataclass
+│       ├── base.py         # NotificationChannel ABC
 │       ├── feishu.py       # 飞书 Lark 官方 SDK
 │       ├── wecom.py        # 企业微信 Webhook
 │       └── email.py        # SMTP 邮件
 └── tests/                  # pytest 单元测试
     ├── __init__.py
+    ├── test_cli.py
     ├── test_config.py      # 配置加载测试
-    └── test_git_ops.py     # GitOperator Mock 测试
+    ├── test_git_ops.py     # GitOperator Mock 测试
+    ├── test_notifications.py
+    ├── test_pm2_ops.py
+    ├── test_scheduler.py
+    ├── test_utils.py
+    └── test_tui/
 ```
 
 ### 模块职责
@@ -64,8 +71,8 @@ vcptoolbox-auto-updater/
 |:---|:---|
 | `cli.py` | CLI 入口。`service` 命令供 SCM 调用；`update` 命令支持手动触发单次更新周期。 |
 | `service.py` | Windows Service 生命周期管理：`SvcDoRun` 加载配置、启动 scheduler、立即执行一次 job，随后进入等待循环；`SvcStop` 优雅停止 scheduler 并设置 stop event。 |
-| `git_ops.py` | 封装原生 `git` 子进程调用。核心策略：**merge preferring remote**（`git merge -X theirs`）。本地有未提交更改时会先自动 `git commit` 保留，然后再执行 merge；若存在结构性冲突，则执行 `git checkout --theirs .` 强制以远程为准。 |
-| `pm2_ops.py` | 封装 `pm2` 子进程调用，自动在 PATH 中查找 `pm2` 可执行文件。 |
+| `git_ops.py` | 封装原生 `git` 子进程调用。核心策略：**stash + reset --hard + reconcile**。本地 tracked 修改先 `git stash push`，然后 `git reset --hard` 硬同步到远程；若 reset 被 untracked 文件阻塞，则解析 stderr 冲突列表、删除冲突文件后重试一次。之后 apply stash，并对 stash 中所有 **modified/deleted** 文件执行 `git checkout HEAD --` 强制回退到远程版本，仅保留 stash 中 **added** 的新文件。若本地处于 detached HEAD 状态，会自动 `checkout <branch>` 后再执行同步。 |
+| `pm2_ops.py` | 封装 `pm2` 子进程调用，自动在 PATH 中查找 `pm2` 可执行文件。支持通过临时 ecosystem 文件一次性启动/重启多进程。 |
 | `scheduler.py` | 基于 `IntervalTrigger(hours=...)` 的后台定时任务封装。 |
 | `config.py` | 使用 `pydantic_settings.BaseSettings` 定义分层配置模型，支持从 YAML 反序列化。 |
 | `utils.py` | `configure_logging` 区分 CLI 模式（控制台彩色输出）与服务模式（RotatingFileHandler + NTEventLogHandler）。 |
@@ -125,8 +132,14 @@ uv run python -m vcptoolbox_updater uninstall
 
 2. **更新周期**（`job()` / `cli.py update`）：
    - `git fetch`
+   - 若本地处于 detached HEAD，自动 `checkout <branch>`
    - 比较 `HEAD` 与 `origin/<branch>`
-   - 如有更新：自动 commit 本地更改 → `git merge -X theirs origin/<branch>`（冲突时强制以远程为准） → `pm2 restart <process_name>`
+   - 如有更新：
+     1. `git add -u` + `git stash push -m "local"`（仅冻结 tracked 变更）
+     2. `git reset --hard origin/<branch>`；若被 untracked 文件阻塞，解析冲突列表、删除后重试
+     3. `git stash apply`；对 stash 中 modified/deleted 文件执行 `git checkout HEAD --` 回退到远程版本
+     4. `git stash drop`
+     5. `pm2 startOrRestart <ecosystem.json>`（支持多进程）
    - 发送通知报告（成功/失败）
 
 ## 配置说明
@@ -138,7 +151,7 @@ service_name: "VCPToolBoxAutoUpdater"
 display_name: "VCP ToolBox Auto Updater"
 description: "..."
 log_level: INFO
-log_file: "C:/Logs/vcptoolbox-updater.log"
+log_file: "F:/Logs/vcptoolbox-updater.log"
 
 git:
   repo_path: "F:/AI_Study_studio/VCPToolBox"
@@ -147,8 +160,16 @@ git:
   check_interval_hours: 24.0
 
 pm2:
-  process_name: "vcptoolbox"
-  # pm2_bin: "C:/.../pm2.cmd"  # 可选，默认自动从 PATH 查找
+  pm2_bin: null           # 可选，默认自动从 PATH 查找
+  processes:
+    - name: "vcp-main"
+      script: "server.js"
+      watch: false
+      max_memory_restart: "1500M"
+    - name: "vcp-admin"
+      script: "adminServer.js"
+      watch: false
+      max_memory_restart: "512M"
 
 notifications:
   feishu: { enabled: false, ... }
@@ -156,12 +177,12 @@ notifications:
   email:  { enabled: false, ... }
 ```
 
-- `repo_path` 必须指向已初始化的 Git 仓库（本地已有 `origin` 远程）。
-- `pm2.process_name` 必须是 PM2 中已保存的进程名。
+- `repo_path` 必须指向已初始化的 Git 仓库（本地已有对应远程）。
+- `pm2.processes` 为进程列表，每个进程至少需 `name` 与 `script`；未指定 `cwd` 时默认使用 `repo_path`。
 
 ## 安全与风险提醒
 
-- **Merge Preferring Remote 策略**：`git_ops.py` 使用 `git merge -X theirs origin/<branch>` 合并远程更改；若存在结构性冲突，则执行 `git checkout --theirs .` 强制以远程为准。本地有未提交更改时会先自动 `git commit` 保留，使其作为独立 commit 参与 merge。
+- **Sync Preferring Remote 策略**：`git_ops.py` 使用 **stash + reset --hard + reconcile** 策略：本地 tracked 修改先 stash，然后硬同步到远程；若 `git reset --hard` 因 untracked 文件冲突而失败，则解析 stderr 中的冲突列表、仅删除这些冲突文件后重试一次。Apply stash 后，对 stash 中所有 modified/deleted 文件执行 `git checkout HEAD --` 强制回退到远程版本，仅保留 stash 中 added 的新文件。该策略避免了显式遍历全部 untracked 文件，只在 reset 失败时才处理冲突。
 - **子进程执行**：Git 与 PM2 操作均通过 `subprocess.run(..., check=True)` 调用外部命令。输入参数来自配置文件，未对用户输入做转义过滤（当前场景下可控）。
 - **敏感信息**：`config.yaml` 包含 `app_secret`、`password`、`webhook_url`。请勿将其提交到版本控制。
 - **权限**：Windows 服务安装与运行需要管理员权限。`install_service.ps1` 顶部包含 `#Requires -RunAsAdministrator`。
@@ -171,8 +192,24 @@ notifications:
 
 - **类型注解**：所有公共函数/方法均带 `from __future__ import annotations` 与类型提示。
 - **日志**：统一使用 `structlog` 结构化日志，通过 `utils.get_logger(__name__)` 获取 logger。避免直接使用 `logging` 或 `print`。
-- **配置**：所有运行时参数通过 `pydantic_settings` 模型校验，禁止在业务代码中直接读取环境变量或 YAML。
+- **配置**：所有运行时参数通过 `pydantic_settings` 模型校验，禁止在业务代直接读取环码中境变量或 YAML。
 - **异常处理**：服务主循环中的异常会被捕获并记录到 EventLog，随后抛出以触发 Windows Service 的故障恢复机制。
+
+## 实测验证记录
+
+以下测试于 `2026-04-20` 在环境 `F:\AI_Study_studio\VCPToolBox\vcptoolbox-auto-updater` 执行，使用命令：
+```powershell
+uv run python -m vcptoolbox_updater update
+```
+
+| 测试项 | 结果 | 观察记录 |
+|:---|:---|:---|
+| `update` CLI 基础执行 | ✅ 通过 | 无新提交时正确返回 `No new commits on remote.` |
+| 完整同步链路 | ✅ 通过 | 检测到更新后，完整执行 `stash → reset --hard → reconcile → pm2 startOrRestart` |
+| detached HEAD 处理 | ✅ 自动修复 | 日志出现 `detached_head_checking_out`，自动 `checkout main` 后继续同步 |
+| untracked 文件保留 | ✅ 验证通过 | `Plugin/VCPTavern/presets/Gemini-fix.json`（untracked 文件）在更新后仍然存在 |
+| stash reconcile | ✅ 验证通过 | stash 中的 modified 文件（如 `package-lock.json`、`Plugin/UserAuth/code.bin`）被正确 revert 到远程版本 |
+| PM2 多进程启动 | ✅ 验证通过 | `vcp-main`、`vcp-admin` 两个进程通过临时 ecosystem 文件成功 `startOrRestart` |
 
 ## 已知问题与不一致（Agent 必读）
 

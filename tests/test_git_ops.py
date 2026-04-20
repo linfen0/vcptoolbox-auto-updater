@@ -1,5 +1,6 @@
 """Unit tests for git operations."""
 
+import os
 from unittest.mock import MagicMock, patch
 
 from vcptoolbox_updater import git_ops
@@ -103,7 +104,7 @@ def test_pull_and_resolve_conflicts_no_update():
         if cmd == ["add", "-u"]:
             return MagicMock(stdout="")
         if cmd == ["reset", "--hard", "abc1234"]:
-            return MagicMock(stdout="")
+            return MagicMock(stdout="", returncode=0)
         return MagicMock(stdout="")
 
     with patch.object(op, "fetch") as mock_fetch, \
@@ -113,7 +114,7 @@ def test_pull_and_resolve_conflicts_no_update():
         assert not result.updated
         mock_fetch.assert_called_once()
         mock_run.assert_any_call("/tmp/repo", ["status", "--porcelain"], check=False)
-        mock_run.assert_any_call("/tmp/repo", ["reset", "--hard", "abc1234"])
+        mock_run.assert_any_call("/tmp/repo", ["reset", "--hard", "abc1234"], check=False)
 
 
 def test_pull_and_resolve_conflicts_with_tracked_local_changes():
@@ -136,7 +137,7 @@ def test_pull_and_resolve_conflicts_with_tracked_local_changes():
         if cmd == ["stash", "push", "-m", "local"]:
             return MagicMock(stdout="")
         if cmd == ["reset", "--hard", "def5678"]:
-            return MagicMock(stdout="")
+            return MagicMock(stdout="", returncode=0)
         if cmd == ["stash", "apply", "stash@{0}"]:
             return MagicMock(stdout="", returncode=0)
         if cmd == ["diff", "--name-only", "--diff-filter=MD", "def5678..stash@{0}"]:
@@ -162,7 +163,7 @@ def test_pull_and_resolve_conflicts_with_tracked_local_changes():
         mock_fetch.assert_called_once()
         mock_run.assert_any_call("/tmp/repo", ["add", "-u"])
         mock_run.assert_any_call("/tmp/repo", ["stash", "push", "-m", "local"])
-        mock_run.assert_any_call("/tmp/repo", ["reset", "--hard", "def5678"])
+        mock_run.assert_any_call("/tmp/repo", ["reset", "--hard", "def5678"], check=False)
         mock_run.assert_any_call("/tmp/repo", ["stash", "apply", "stash@{0}"], check=False)
         mock_run.assert_any_call("/tmp/repo", ["diff", "--name-only", "--diff-filter=MD", "def5678..stash@{0}"], check=False)
         mock_run.assert_any_call("/tmp/repo", ["checkout", "HEAD", "--", "file.txt"])
@@ -187,7 +188,7 @@ def test_pull_and_resolve_conflicts_preserves_untracked_files():
         if cmd == ["add", "-u"]:
             return MagicMock(stdout="")
         if cmd == ["reset", "--hard", "def5678"]:
-            return MagicMock(stdout="")
+            return MagicMock(stdout="", returncode=0)
         return MagicMock(stdout="")
 
     def commit_hash_side_effect(ref):
@@ -203,7 +204,7 @@ def test_pull_and_resolve_conflicts_preserves_untracked_files():
         # No stash created because no tracked changes
         calls = [c.args for c in mock_run.call_args_list]
         assert ("/tmp/repo", ["stash", "push", "-m", "local"]) not in calls
-        mock_run.assert_any_call("/tmp/repo", ["reset", "--hard", "def5678"])
+        mock_run.assert_any_call("/tmp/repo", ["reset", "--hard", "def5678"], check=False)
 
 
 def test_pull_and_resolve_conflicts_new_local_files_kept():
@@ -226,7 +227,7 @@ def test_pull_and_resolve_conflicts_new_local_files_kept():
         if cmd == ["stash", "push", "-m", "local"]:
             return MagicMock(stdout="")
         if cmd == ["reset", "--hard", "def5678"]:
-            return MagicMock(stdout="")
+            return MagicMock(stdout="", returncode=0)
         if cmd == ["stash", "apply", "stash@{0}"]:
             return MagicMock(stdout="", returncode=0)
         # diff-filter=MD returns nothing because new_feature.py is Added, not Modified/Deleted
@@ -247,7 +248,7 @@ def test_pull_and_resolve_conflicts_new_local_files_kept():
         result = op.pull_and_resolve_conflicts()
         assert result.updated
         mock_run.assert_any_call("/tmp/repo", ["stash", "push", "-m", "local"])
-        mock_run.assert_any_call("/tmp/repo", ["reset", "--hard", "def5678"])
+        mock_run.assert_any_call("/tmp/repo", ["reset", "--hard", "def5678"], check=False)
         mock_run.assert_any_call("/tmp/repo", ["stash", "apply", "stash@{0}"], check=False)
         mock_run.assert_any_call("/tmp/repo", ["diff", "--name-only", "--diff-filter=MD", "def5678..stash@{0}"], check=False)
         mock_run.assert_any_call("/tmp/repo", ["stash", "drop", "stash@{0}"])
@@ -276,7 +277,7 @@ def test_pull_and_resolve_conflicts_detached_head():
         if cmd == ["add", "-u"]:
             return MagicMock(stdout="")
         if cmd == ["reset", "--hard", "def5678"]:
-            return MagicMock(stdout="")
+            return MagicMock(stdout="", returncode=0)
         return MagicMock(stdout="")
 
     def commit_hash_side_effect(ref):
@@ -290,4 +291,57 @@ def test_pull_and_resolve_conflicts_detached_head():
         result = op.pull_and_resolve_conflicts()
         assert result.updated
         mock_run.assert_any_call("/tmp/repo", ["checkout", "main"])
-        mock_run.assert_any_call("/tmp/repo", ["reset", "--hard", "def5678"])
+        mock_run.assert_any_call("/tmp/repo", ["reset", "--hard", "def5678"], check=False)
+
+
+def test_pull_and_resolve_conflicts_untracked_conflicts_with_remote_new_file():
+    """Untracked files that collide with newly-tracked remote files are removed on retry."""
+    op = GitOperator("/tmp/repo", "origin", "main")
+
+    reset_call_count = 0
+
+    def run_side_effect(repo_path, cmd, **kwargs):
+        nonlocal reset_call_count
+        if cmd == ["rev-parse", "--abbrev-ref", "HEAD"]:
+            return MagicMock(stdout="main")
+        if cmd == ["rev-parse", "--short", "origin/main"]:
+            return MagicMock(stdout="def5678")
+        if cmd == ["rev-parse", "--short", "HEAD"]:
+            return MagicMock(stdout="abc1234")
+        if cmd == ["rev-parse", "--short", "main"]:
+            return MagicMock(stdout="def5678")
+        if cmd == ["status", "--porcelain"]:
+            return MagicMock(stdout="")
+        if cmd == ["add", "-u"]:
+            return MagicMock(stdout="")
+        if cmd == ["reset", "--hard", "def5678"]:
+            reset_call_count += 1
+            if reset_call_count == 1:
+                return MagicMock(
+                    returncode=1,
+                    stderr=(
+                        "error: The following untracked working tree files would be overwritten by checkout:\n"
+                        "\tconfig.env\n"
+                        "Please move or remove them before you switch branches.\n"
+                        "Aborting\n"
+                    ),
+                )
+            return MagicMock(stdout="")
+        return MagicMock(stdout="")
+
+    def commit_hash_side_effect(ref):
+        if ref == "HEAD":
+            return "abc1234"
+        return "def5678"
+
+    with patch.object(op, "fetch") as mock_fetch, \
+         patch.object(git_ops, "_git_run", side_effect=run_side_effect) as mock_run, \
+         patch.object(op, "get_commit_hash", side_effect=commit_hash_side_effect), \
+         patch("vcptoolbox_updater.git_ops.os.remove") as mock_remove, \
+         patch("vcptoolbox_updater.git_ops.os.path.isdir", return_value=False):
+        result = op.pull_and_resolve_conflicts()
+        assert result.updated
+        # reset --hard should have been called twice (fail then retry)
+        assert reset_call_count == 2
+        mock_remove.assert_called_once_with(os.path.join("/tmp/repo", "config.env"))
+        mock_run.assert_any_call("/tmp/repo", ["reset", "--hard", "def5678"], check=False)

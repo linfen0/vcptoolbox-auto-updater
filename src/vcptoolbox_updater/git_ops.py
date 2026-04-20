@@ -4,9 +4,10 @@ The core sync strategy (``pull_and_resolve_conflicts``) works as follows:
 
 1. Stash any local tracked changes (``git stash push -m "local"``).
 2. Hard-reset to the remote commit (``git reset --hard <remote_hash>``).
-   Untracked files are left untouched.
+   If untracked files block the reset, parse the error, remove only those
+   conflicting files, and retry the reset.
 3. Apply the stash back (``git stash apply``). Conflicts are ignored because
-   we will reconcile manually in the next step.
+   we reconcile manually in the next step.
 4. For every file that was **modified** or **deleted** in the stash,
    force the remote (HEAD) version (``git checkout HEAD -- <file>``).
 5. Files that were **added** in the stash remain as-is.
@@ -18,12 +19,55 @@ local files that did not exist on the remote.
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 
 from vcptoolbox_updater.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+def _parse_untracked_reset_conflicts(stderr: str) -> list[str]:
+    """Extract untracked file paths from a failed ``git reset --hard`` stderr.
+
+    Git emits output like::
+
+        error: The following untracked working tree files would be overwritten by checkout:
+            config.env
+            another.file
+        Please move or remove them before you switch branches.
+        Aborting
+
+    This function collects the indented file names and returns them as a list.
+    If the stderr does not match the expected pattern, an empty list is
+    returned so that the caller can treat it as a non-conflict error.
+
+    Args:
+        stderr: Raw stderr text from the failed git command.
+
+    Returns:
+        List of relative file paths that caused the reset to abort.
+    """
+    lines = stderr.splitlines()
+    files: list[str] = []
+    in_block = False
+    for line in lines:
+        stripped = line.strip()
+        if "would be overwritten by checkout:" in stripped:
+            in_block = True
+            continue
+        if in_block:
+            if not stripped:
+                break
+            # Git indents file names with a leading tab or spaces.
+            # We only take lines that look like indented file paths.
+            if line.startswith("\t") or line.startswith(" "):
+                files.append(stripped)
+            else:
+                break
+    return files
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +211,10 @@ class GitOperator:
         modifications or deletions that conflict with the remote version.
         Only *new* files (added locally) survive the operation.
 
+        If ``git reset --hard`` aborts because of untracked file collisions,
+        the conflicting files are removed and the reset is retried **once**.
+        This avoids the overhead of scanning all untracked files on every run.
+
         Returns:
             A :class:`GitUpdateResult` indicating whether the working tree
             actually changed commits.
@@ -196,8 +244,38 @@ class GitOperator:
             local_stash = "stash@{0}"
             logger.info("local_tracked_changes_stashed", stash=local_stash)
 
-        # 2. Hard reset to remote (untracked files remain untouched)
-        _git_run(self.repo_path, ["reset", "--hard", remote_hash])
+        # 2. Hard reset to remote; if blocked by untracked files, remove and retry
+        reset_result = _git_run(self.repo_path, ["reset", "--hard", remote_hash], check=False)
+        if reset_result.returncode != 0:
+            conflicting = _parse_untracked_reset_conflicts(reset_result.stderr)
+            if conflicting:
+                logger.warning(
+                    "reset_blocked_by_untracked_files_removing",
+                    file_count=len(conflicting),
+                    files=conflicting,
+                )
+                for f in conflicting:
+                    abs_path = os.path.join(self.repo_path, f)
+                    try:
+                        if os.path.isdir(abs_path) and not os.path.islink(abs_path):
+                            shutil.rmtree(abs_path)
+                        else:
+                            os.remove(abs_path)
+                    except Exception as exc:
+                        logger.error(
+                            "failed_to_remove_conflicting_untracked",
+                            file=f,
+                            error=str(exc),
+                        )
+                        raise
+                _git_run(self.repo_path, ["reset", "--hard", remote_hash])
+            else:
+                err_msg = reset_result.stderr.strip() or "(no stderr output)"
+                raise RuntimeError(
+                    f"Git command failed in {self.repo_path}: "
+                    f"git reset --hard {remote_hash}\n"
+                    f"Error: {err_msg}"
+                )
 
         # 3. If we stashed changes, apply and reconcile: keep only *new* files from stash
         if local_stash:

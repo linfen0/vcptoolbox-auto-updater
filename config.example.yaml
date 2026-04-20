@@ -5,14 +5,27 @@ description: "Automatically pulls VCPToolBox updates and restarts PM2 process."
 log_level: INFO
 log_file: "F:\\AI_Study_studio\\VCPToolBox\\vcptoolbox-auto-updater\\logs"
 
+repo_path: "F:/AI_Study_studio/VCPToolBox"
+
 git:
-  repo_path: "F:/AI_Study_studio/VCPToolBox"
-  remote_name: "lionsky"
-  branch: "master"
+  remote_name: "origin"
+  branch: "main"
   check_interval_hours: 24.0
 
 pm2:
-  process_name: "vcp-admin vcp-main" #不同进程名使用空格隔开
+  pm2_bin: null           # 可选，默认自动从 PATH 查找
+  processes:
+    - name: "vcp-main"
+      script: "server.js"
+      watch: false
+      max_memory_restart: "1500M"
+      kill_timeout: 15000
+
+    - name: "vcp-admin"
+      script: "adminServer.js"
+      watch: false
+      max_memory_restart: "512M"
+      kill_timeout: 5000
 
 notifications:
   feishu:

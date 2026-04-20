@@ -14,7 +14,7 @@
 
 - **多通道通知**：飞书（官方 SDK）、企业微信（Webhook）、邮件（SMTP）
 
-- **手动更新 CLI**：支持命令行手动触发单次更新
+- **手动更新 CLI / TUI**：支持命令行与终端界面手动触发更新
 
 ## 项目结构
 
@@ -36,13 +36,36 @@ vcptoolbox-auto-updater/
 │       ├── scheduler.py
 │       ├── service.py
 │       ├── utils.py
-│       └── notifications/
+│       ├── notifications/
+│       │   ├── __init__.py
+│       │   ├── base.py
+│       │   ├── feishu.py
+│       │   ├── wecom.py
+│       │   └── email.py
+│       └── tui/
+│           ├── __init__.py
+│           ├── app.py
+│           ├── i18n.py
+│           └── screens/
+│               ├── main_menu.py
+│               ├── log_viewer.py
+│               ├── service_manager.py
+│               └── manual_update.py
 │           ├── __init__.py
 │           ├── base.py
 │           ├── feishu.py
 │           ├── wecom.py
 │           └── email.py
 └── tests/
+    ├── __init__.py
+    ├── test_cli.py
+    ├── test_config.py
+    ├── test_git_ops.py
+    ├── test_notifications.py
+    ├── test_pm2_ops.py
+    ├── test_scheduler.py
+    ├── test_utils.py
+    └── test_tui/
 ```
 
 ## 快速开始
@@ -97,6 +120,9 @@ uv run python -m vcptoolbox_updater update
 uv run python -m vcptoolbox_updater start
 uv run python -m vcptoolbox_updater stop
 uv run python -m vcptoolbox_updater uninstall
+
+# 启动 TUI 终端界面
+uv run python -m vcptoolbox_updater.tui
 ```
 
 ## 技术栈
@@ -109,6 +135,7 @@ uv run python -m vcptoolbox_updater uninstall
 | 配置管理 | `pydantic-settings` + YAML |
 | 结构化日志 | `structlog` |
 | CLI | `click` |
+| TUI 终端界面 | `textual` |
 | 飞书通知 | `lark-oapi` 官方 SDK |
 | 企微通知 | `requests` + Webhook |
 | 邮件通知 | `smtplib` 标准库 |

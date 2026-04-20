@@ -23,6 +23,7 @@ VCPToolBox Auto Updater 是一个基于 Python 的 Windows 后台服务，用于
 | 飞书通知 | `lark-oapi>=1.4.0` |
 | 企业微信通知 | `requests>=2.32.0` |
 | 邮件通知 | `smtplib`（标准库） |
+| TUI 终端界面 | `textual>=8.2.3` |
 | 构建后端 | `hatchling` |
 
 ## 代码组织
@@ -47,12 +48,21 @@ vcptoolbox-auto-updater/
 │   ├── service.py          # AutoUpdaterService：pywin32 Windows Service 实现
 │   ├── update_report.py    # UpdateReport dataclass：更新结果数据结构
 │   ├── utils.py            # structlog 初始化与日志处理器（文件 / EventLog）
-│   └── notifications/      # 通知通道实现
-│       ├── __init__.py     # 工厂函数 build_notifiers
-│       ├── base.py         # NotificationChannel ABC
-│       ├── feishu.py       # 飞书 Lark 官方 SDK
-│       ├── wecom.py        # 企业微信 Webhook
-│       └── email.py        # SMTP 邮件
+│   ├── notifications/      # 通知通道实现
+│   │   ├── __init__.py     # 工厂函数 build_notifiers
+│   │   ├── base.py         # NotificationChannel ABC
+│   │   ├── feishu.py       # 飞书 Lark 官方 SDK
+│   │   ├── wecom.py        # 企业微信 Webhook
+│   │   └── email.py        # SMTP 邮件
+│   └── tui/                # Textual TUI 终端界面
+│       ├── __init__.py     # TUI 入口 main()
+│       ├── app.py          # UpdaterTuiApp：Textual App 主类
+│       ├── i18n.py         # 中文本地化文案
+│       └── screens/        # TUI 屏幕
+│           ├── main_menu.py      # 主菜单（导航 + 工作流说明）
+│           ├── log_viewer.py     # 日志实时 tail（支持 1s 刷新）
+│           ├── service_manager.py # Windows 服务 install/start/stop/uninstall
+│           └── manual_update.py  # 手动触发单次更新并实时输出
 └── tests/                  # pytest 单元测试
     ├── __init__.py
     ├── test_cli.py
@@ -76,6 +86,11 @@ vcptoolbox-auto-updater/
 | `scheduler.py` | 基于 `IntervalTrigger(hours=...)` 的后台定时任务封装。 |
 | `config.py` | 使用 `pydantic_settings.BaseSettings` 定义分层配置模型，支持从 YAML 反序列化。 |
 | `utils.py` | `configure_logging` 区分 CLI 模式（控制台彩色输出）与服务模式（RotatingFileHandler + NTEventLogHandler）。 |
+| `tui/app.py` | Textual TUI 主应用。管理 Screen 栈，提供 `toggle_dark`/`pop_screen` 全局快捷键。 |
+| `tui/screens/main_menu.py` | 主菜单：显示监控仓库路径、工作流说明，导航到各功能屏幕。 |
+| `tui/screens/log_viewer.py` | 日志查看器：加载 `config.yaml` 中的 `log_file`，显示最近 200 行并 1 秒间隔实时 tail。 |
+| `tui/screens/service_manager.py` | 服务管理：通过子进程调用 `python -m vcptoolbox_updater <install/start/stop/uninstall>`，结果回显到界面。 |
+| `tui/screens/manual_update.py` | 手动更新：异步子进程执行 `update` 命令，将 stdout/stderr 实时写入 RichLog，完成后通知。 |
 
 ## 构建、测试与运行命令
 
@@ -106,6 +121,11 @@ uv run python -m vcptoolbox_updater install
 uv run python -m vcptoolbox_updater start
 uv run python -m vcptoolbox_updater stop
 uv run python -m vcptoolbox_updater uninstall
+
+# 启动 TUI 终端界面
+uv run python -m vcptoolbox_updater.tui
+# 或安装后直接运行
+vcptoolbox-updater-tui
 ```
 
 ### 安装为 Windows 服务（推荐）

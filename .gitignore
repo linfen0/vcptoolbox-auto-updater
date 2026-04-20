@@ -42,7 +42,7 @@ env/
 .DS_Store
 Thumbs.db
 desktop.ini
-
+logs
 # Testing
 .pytest_cache/
 .coverage

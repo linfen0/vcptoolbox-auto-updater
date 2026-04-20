@@ -42,36 +42,46 @@ def _make_mock_cfg():
 
 def test_cli_update_no_update():
     runner = CliRunner()
-    mock_git_result = MagicMock()
-    mock_git_result.updated = False
-    mock_git_result.local_commit = "abc1234"
-    mock_git_result.remote_commit = "abc1234"
-
-    with patch("vcptoolbox_updater.cli.load_config", return_value=_make_mock_cfg()), \
-         patch("vcptoolbox_updater.cli.GitOperator") as mock_git_op_cls, \
-         patch("vcptoolbox_updater.cli.configure_logging"):
-        mock_git_op = MagicMock()
-        mock_git_op.pull_and_resolve_conflicts.return_value = mock_git_result
-        mock_git_op_cls.return_value = mock_git_op
-        result = runner.invoke(cli, ["--config", "/tmp/cfg.yaml", "update"])
-        assert result.exit_code == 0
-        assert "No new commits on remote" in result.output
-
-
-def test_cli_update_with_update():
-    runner = CliRunner()
-    mock_git_result = MagicMock()
-    mock_git_result.updated = True
-    mock_git_result.local_commit = "abc1234"
-    mock_git_result.remote_commit = "def5678"
-    mock_git_result.message = "Updated"
+    mock_check_result = MagicMock()
+    mock_check_result.updated = False
+    mock_check_result.local_commit = "abc1234"
+    mock_check_result.remote_commit = "abc1234"
 
     with patch("vcptoolbox_updater.cli.load_config", return_value=_make_mock_cfg()), \
          patch("vcptoolbox_updater.cli.GitOperator") as mock_git_op_cls, \
          patch("vcptoolbox_updater.cli.Pm2Operator") as mock_pm2_op_cls, \
          patch("vcptoolbox_updater.cli.configure_logging"):
         mock_git_op = MagicMock()
-        mock_git_op.pull_and_resolve_conflicts.return_value = mock_git_result
+        mock_git_op.check_update_needed.return_value = mock_check_result
+        mock_git_op_cls.return_value = mock_git_op
+        mock_pm2_op = MagicMock()
+        mock_pm2_op_cls.return_value = mock_pm2_op
+        result = runner.invoke(cli, ["--config", "/tmp/cfg.yaml", "update"])
+        assert result.exit_code == 0
+        assert "No new commits on remote" in result.output
+        mock_pm2_op.kill.assert_not_called()
+
+
+def test_cli_update_with_update():
+    runner = CliRunner()
+    mock_check_result = MagicMock()
+    mock_check_result.updated = True
+    mock_check_result.local_commit = "abc1234"
+    mock_check_result.remote_commit = "def5678"
+
+    mock_sync_result = MagicMock()
+    mock_sync_result.updated = True
+    mock_sync_result.local_commit = "abc1234"
+    mock_sync_result.remote_commit = "def5678"
+    mock_sync_result.message = "Updated"
+
+    with patch("vcptoolbox_updater.cli.load_config", return_value=_make_mock_cfg()), \
+         patch("vcptoolbox_updater.cli.GitOperator") as mock_git_op_cls, \
+         patch("vcptoolbox_updater.cli.Pm2Operator") as mock_pm2_op_cls, \
+         patch("vcptoolbox_updater.cli.configure_logging"):
+        mock_git_op = MagicMock()
+        mock_git_op.check_update_needed.return_value = mock_check_result
+        mock_git_op.pull_and_resolve_conflicts.return_value = mock_sync_result
         mock_git_op_cls.return_value = mock_git_op
         mock_pm2_op = MagicMock()
         mock_pm2_op.restart.return_value = "PM2 restarted"
@@ -79,17 +89,28 @@ def test_cli_update_with_update():
         result = runner.invoke(cli, ["--config", "/tmp/cfg.yaml", "update"])
         assert result.exit_code == 0
         assert "Updated" in result.output
+        mock_pm2_op.kill.assert_called_once()
         mock_pm2_op.restart.assert_called_once_with(cwd=str(Path("/tmp/repo")))
 
 
 def test_cli_update_failure():
     runner = CliRunner()
+    mock_check_result = MagicMock()
+    mock_check_result.updated = True
+    mock_check_result.local_commit = "abc1234"
+    mock_check_result.remote_commit = "def5678"
+
     with patch("vcptoolbox_updater.cli.load_config", return_value=_make_mock_cfg()), \
          patch("vcptoolbox_updater.cli.GitOperator") as mock_git_op_cls, \
+         patch("vcptoolbox_updater.cli.Pm2Operator") as mock_pm2_op_cls, \
          patch("vcptoolbox_updater.cli.configure_logging"):
         mock_git_op = MagicMock()
+        mock_git_op.check_update_needed.return_value = mock_check_result
         mock_git_op.pull_and_resolve_conflicts.side_effect = RuntimeError("git error")
         mock_git_op_cls.return_value = mock_git_op
+        mock_pm2_op = MagicMock()
+        mock_pm2_op_cls.return_value = mock_pm2_op
         result = runner.invoke(cli, ["--config", "/tmp/cfg.yaml", "update"])
         assert result.exit_code == 0
         assert "Update failed" in result.output
+        mock_pm2_op.kill.assert_called_once()

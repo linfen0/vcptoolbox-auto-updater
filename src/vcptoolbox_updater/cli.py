@@ -104,30 +104,45 @@ def execute_update(config_path: str, service_mode: bool = False) -> UpdateReport
 
     report: UpdateReport | None = None
     try:
-        git_result = git_op.pull_and_resolve_conflicts()
-        if not git_result.updated:
+        git_op.fetch()
+        check_result = git_op.check_update_needed()
+        if not check_result.updated:
             report = UpdateReport(
                 success=True,
                 repo_path=str(cfg.repo_path),
                 branch=cfg.git.branch,
-                from_commit=git_result.local_commit,
-                to_commit=git_result.remote_commit,
+                from_commit=check_result.local_commit,
+                to_commit=check_result.remote_commit,
                 pm2_process=", ".join(p.name for p in cfg.pm2.processes),
                 pm2_output="No restart needed.",
                 message="No new commits on remote.",
             )
         else:
-            pm2_output = pm2_op.restart(cwd=str(cfg.repo_path))
-            report = UpdateReport(
-                success=True,
-                repo_path=str(cfg.repo_path),
-                branch=cfg.git.branch,
-                from_commit=git_result.local_commit,
-                to_commit=git_result.remote_commit,
-                pm2_process=", ".join(p.name for p in cfg.pm2.processes),
-                pm2_output=pm2_output,
-                message=git_result.message,
-            )
+            pm2_op.kill()
+            try:
+                sync_result = git_op.pull_and_resolve_conflicts()
+                pm2_output = pm2_op.restart(cwd=str(cfg.repo_path))
+                report = UpdateReport(
+                    success=True,
+                    repo_path=str(cfg.repo_path),
+                    branch=cfg.git.branch,
+                    from_commit=sync_result.local_commit,
+                    to_commit=sync_result.remote_commit,
+                    pm2_process=", ".join(p.name for p in cfg.pm2.processes),
+                    pm2_output=pm2_output,
+                    message=sync_result.message,
+                )
+            except Exception as exc:
+                report = UpdateReport(
+                    success=False,
+                    repo_path=str(cfg.repo_path),
+                    branch=cfg.git.branch,
+                    from_commit=check_result.local_commit,
+                    to_commit=check_result.remote_commit,
+                    pm2_process=", ".join(p.name for p in cfg.pm2.processes),
+                    pm2_output="PM2 killed but update failed; service not restarted.",
+                    message=f"Error after killing PM2: {exc}",
+                )
     except Exception as exc:
         report = UpdateReport(
             success=False,

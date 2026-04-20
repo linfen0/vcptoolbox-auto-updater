@@ -64,6 +64,11 @@ class Pm2Operator:
         ecosystem = self.pm2_cfg.to_ecosystem_dict(default_cwd=cwd)
         return _start_or_restart(self.pm2_bin, ecosystem, cwd=cwd)
 
+    def kill(self) -> str:
+        stdout = _run_pm2(self.pm2_bin, ["kill"])
+        logger.info("pm2_kill_completed", stdout=stdout)
+        return stdout
+
     def save(self) -> None:
         _run_pm2(self.pm2_bin, ["save"])
         logger.info("pm2_save_completed")

@@ -41,6 +41,14 @@ def test_restart_no_config_raises():
         op.restart()
 
 
+def test_kill():
+    op = pm2_ops.Pm2Operator(pm2_bin="pm2")
+    with patch.object(pm2_ops, "_run_pm2", return_value="[PM2] kill all processes") as mock_run:
+        output = op.kill()
+        mock_run.assert_called_once_with("pm2", ["kill"])
+        assert output == "[PM2] kill all processes"
+
+
 def test_save():
     op = pm2_ops.Pm2Operator(pm2_bin="pm2")
     with patch.object(pm2_ops, "_run_pm2", return_value="") as mock_run:

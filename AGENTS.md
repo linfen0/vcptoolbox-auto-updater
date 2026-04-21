@@ -81,7 +81,7 @@ vcptoolbox-auto-updater/
 |:---|:---|
 | `cli.py` | CLI 入口。`service` 命令供 SCM 调用；`update` 命令支持手动触发单次更新周期。 |
 | `service.py` | Windows Service 生命周期管理：`SvcDoRun` 加载配置、启动 scheduler、立即执行一次 job，随后进入等待循环；`SvcStop` 优雅停止 scheduler 并设置 stop event。 |
-| `git_ops.py` | 封装原生 `git` 子进程调用。核心策略：**stash + reset --hard + reconcile**。本地 tracked 修改先 `git stash push`，然后 `git reset --hard` 硬同步到远程；若 reset 被 untracked 文件阻塞，则解析 stderr 冲突列表、删除冲突文件后重试一次。之后 apply stash，并对 stash 中所有 **modified/deleted** 文件执行 `git checkout HEAD --` 强制回退到远程版本，仅保留 stash 中 **added** 的新文件。若本地处于 detached HEAD 状态，会自动 `checkout <branch>` 后再执行同步。 |
+| `git_ops.py` | 封装原生 `git` 子进程调用。核心策略：**stash + reset --hard + reconcile**。本地 tracked 修改先 `git stash push`，然后 `git reset --hard` 硬同步到远程；若 reset 被 untracked 文件阻塞，则解析 stderr 冲突列表、删除冲突文件后重试一次。之后 apply stash，并对 stash 中所有 **modified/deleted** 文件执行 `git checkout HEAD --` 强制回退到远程版本，仅保留 stash 中 **added** 的新文件。若本地处于 detached HEAD 状态，会先 stash 再 `checkout <branch>`，避免切换分支时丢失工作区内容。 |
 | `pm2_ops.py` | 封装 `pm2` 子进程调用，自动在 PATH 中查找 `pm2` 可执行文件。支持通过临时 ecosystem 文件一次性启动/重启多进程。 |
 | `scheduler.py` | 基于 `IntervalTrigger(hours=...)` 的后台定时任务封装。 |
 | `config.py` | 使用 `pydantic_settings.BaseSettings` 定义分层配置模型，支持从 YAML 反序列化。 |
@@ -152,14 +152,14 @@ vcptoolbox-updater-tui
 
 2. **更新周期**（`job()` / `cli.py update`）：
    - `git fetch`
-   - 若本地处于 detached HEAD，自动 `checkout <branch>`
    - 比较 `HEAD` 与 `origin/<branch>`
    - 如有更新：
-     1. `git add -u` + `git stash push -m "local"`（仅冻结 tracked 变更）
-     2. `git reset --hard origin/<branch>`；若被 untracked 文件阻塞，解析冲突列表、删除后重试
-     3. `git stash apply`；对 stash 中 modified/deleted 文件执行 `git checkout HEAD --` 回退到远程版本
-     4. `git stash drop`
-     5. `pm2 startOrRestart <ecosystem.json>`（支持多进程）
+     1. `git add -u` + `git stash push -m "local"`（仅冻结 tracked 变更；若处于 detached HEAD，此 stash 步骤在 checkout 之前执行，防止内容丢失）
+     2. 若本地处于 detached HEAD，自动 `checkout <branch>`
+     3. `git reset --hard origin/<branch>`；若被 untracked 文件阻塞，解析冲突列表、删除后重试
+     4. `git stash apply`；对 stash 中 modified/deleted 文件执行 `git checkout HEAD --` 回退到远程版本
+     5. `git stash drop`
+     6. `pm2 startOrRestart <ecosystem.json>`（支持多进程）
    - 发送通知报告（成功/失败）
 
 ## 配置说明
@@ -212,8 +212,9 @@ notifications:
 
 - **类型注解**：所有公共函数/方法均带 `from __future__ import annotations` 与类型提示。
 - **日志**：统一使用 `structlog` 结构化日志，通过 `utils.get_logger(__name__)` 获取 logger。避免直接使用 `logging` 或 `print`。
-- **配置**：所有运行时参数通过 `pydantic_settings` 模型校验，禁止在业务代直接读取环码中境变量或 YAML。
+- **配置**：所有运行时参数通过 `pydantic_settings` 模型校验，禁止在业务代码中直接读取环境变量或 YAML。
 - **异常处理**：服务主循环中的异常会被捕获并记录到 EventLog，随后抛出以触发 Windows Service 的故障恢复机制。
+- **文档同步**：每次对代码进行**显著功能变更**（如新增配置项、修改同步策略、变更 CLI 命令、调整通知通道等），必须同步更新 `README.md` 中的对应说明，并随代码变更一起提交并推送至 Git。禁止仅修改代码而遗漏文档。
 
 ## 实测验证记录
 

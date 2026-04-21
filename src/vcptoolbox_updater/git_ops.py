@@ -286,41 +286,45 @@ class GitOperator:
             RuntimeError: If the reset fails for a reason other than untracked
                 file collisions, or if the retry also fails.
         """
-        reset_result = _git_run(
+        result = _git_run(
             self.repo_path, ["reset", "--hard", remote_hash], check=False
         )
-        if reset_result.returncode == 0:
+        if result.returncode == 0:
             return
 
-        conflicting = _parse_untracked_reset_conflicts(reset_result.stderr)
-        if conflicting:
-            logger.warning(
-                "reset_blocked_by_untracked_files_removing",
-                file_count=len(conflicting),
-                files=conflicting,
-            )
-            for f in conflicting:
-                abs_path = os.path.join(self.repo_path, f)
-                try:
-                    if os.path.isdir(abs_path) and not os.path.islink(abs_path):
-                        shutil.rmtree(abs_path)
-                    else:
-                        os.remove(abs_path)
-                except Exception as exc:
-                    logger.error(
-                        "failed_to_remove_conflicting_untracked",
-                        file=f,
-                        error=str(exc),
-                    )
-                    raise
-            _git_run(self.repo_path, ["reset", "--hard", remote_hash])
-        else:
-            err_msg = reset_result.stderr.strip() or "(no stderr output)"
+        conflicting = _parse_untracked_reset_conflicts(result.stderr)
+        if not conflicting:
+            err_msg = result.stderr.strip() or "(no stderr output)"
             raise RuntimeError(
                 f"Git command failed in {self.repo_path}: "
                 f"git reset --hard {remote_hash}\n"
                 f"Error: {err_msg}"
             )
+
+        logger.warning(
+            "reset_blocked_by_untracked_files_removing",
+            file_count=len(conflicting),
+            files=conflicting,
+        )
+        for f in conflicting:
+            self._remove_untracked_path(f)
+
+        _git_run(self.repo_path, ["reset", "--hard", remote_hash])
+
+    def _remove_untracked_path(self, rel_path: str) -> None:
+        abs_path = os.path.join(self.repo_path, rel_path)
+        try:
+            if os.path.isdir(abs_path) and not os.path.islink(abs_path):
+                shutil.rmtree(abs_path)
+            else:
+                os.remove(abs_path)
+        except Exception as exc:
+            logger.error(
+                "failed_to_remove_conflicting_untracked",
+                file=rel_path,
+                error=str(exc),
+            )
+            raise
 
     def _apply_and_reconcile_stash(self, local_stash: str, remote_hash: str) -> None:
         """Apply the stash and reconcile so only *new* local files survive.
@@ -344,26 +348,19 @@ class GitOperator:
 
         # Gather all files that should be reverted to HEAD (modified/deleted
         # from the stash plus any unmerged files caused by tree conflicts).
-        md_result = _git_run(
-            self.repo_path,
-            ["diff", "--name-only", "--diff-filter=MD", f"{remote_hash}..{local_stash}"],
-            check=False,
+        #处理树冲突
+        def _name_set(*args: str) -> set[str]:
+            result = _git_run(self.repo_path, list(args), check=False)
+            return {
+                line.strip()
+                for line in result.stdout.strip().splitlines()
+                if line.strip()
+            }
+
+        files_to_revert = _name_set(
+            "diff", "--name-only", "--diff-filter=MD", f"{remote_hash}..{local_stash}"
         )
-        u_result = _git_run(
-            self.repo_path,
-            ["diff", "--name-only", "--diff-filter=U"],
-            check=False,
-        )
-        files_to_revert = {
-            line.strip()
-            for line in md_result.stdout.strip().splitlines()
-            if line.strip()
-        }
-        unmerged_files = {
-            line.strip()
-            for line in u_result.stdout.strip().splitlines()
-            if line.strip()
-        }
+        unmerged_files = _name_set("diff", "--name-only", "--diff-filter=U")
         all_files = files_to_revert | unmerged_files
 
         if not all_files:
@@ -372,12 +369,7 @@ class GitOperator:
 
         # Determine which files actually exist in HEAD so we never attempt an
         # illegal ``git checkout HEAD --`` on a path that is not present.
-        head_result = _git_run(
-            self.repo_path,
-            ["ls-tree", "-r", "HEAD", "--name-only"],
-            check=False,
-        )
-        head_files = set(head_result.stdout.strip().splitlines())
+        head_files = _name_set("ls-tree", "-r", "HEAD", "--name-only")
 
         checkout_files = sorted(f for f in all_files if f in head_files)
         if checkout_files:
@@ -388,7 +380,7 @@ class GitOperator:
             )
             _git_run(
                 self.repo_path,
-                ["checkout", "HEAD", "--", "--stdin"],
+                ["checkout", "HEAD", "--pathspec-from-file=-"],
                 input="\n".join(checkout_files),
             )
 

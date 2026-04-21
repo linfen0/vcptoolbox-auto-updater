@@ -174,7 +174,7 @@ def test_pull_and_resolve_conflicts_with_tracked_local_changes():
             return MagicMock(stdout="")
         if cmd == ["ls-tree", "-r", "HEAD", "--name-only"]:
             return MagicMock(stdout="file.txt\n")
-        if cmd == ["checkout", "HEAD", "--", "--stdin"]:
+        if cmd == ["checkout", "HEAD", "--pathspec-from-file=-"]:
             return MagicMock(stdout="")
         if cmd == ["stash", "drop", "stash@{0}"]:
             return MagicMock(stdout="")
@@ -200,7 +200,7 @@ def test_pull_and_resolve_conflicts_with_tracked_local_changes():
         mock_run.assert_any_call("/tmp/repo", ["diff", "--name-only", "--diff-filter=MD", "def5678..stash@{0}"], check=False)
         mock_run.assert_any_call("/tmp/repo", ["diff", "--name-only", "--diff-filter=U"], check=False)
         mock_run.assert_any_call("/tmp/repo", ["ls-tree", "-r", "HEAD", "--name-only"], check=False)
-        mock_run.assert_any_call("/tmp/repo", ["checkout", "HEAD", "--", "--stdin"], input="file.txt")
+        mock_run.assert_any_call("/tmp/repo", ["checkout", "HEAD", "--pathspec-from-file=-"], input="file.txt")
         mock_run.assert_any_call("/tmp/repo", ["stash", "drop", "stash@{0}"])
 
 
@@ -288,7 +288,7 @@ def test_pull_and_resolve_conflicts_new_local_files_kept():
         mock_run.assert_any_call("/tmp/repo", ["stash", "drop", "stash@{0}"])
         # Must NOT checkout HEAD for new_feature.py
         calls = [c.args for c in mock_run.call_args_list]
-        assert ("/tmp/repo", ["checkout", "HEAD", "--", "--stdin"], {"input": "new_feature.py", "check": False}) not in calls
+        assert ("/tmp/repo", ["checkout", "HEAD", "--pathspec-from-file=-"], {"input": "new_feature.py", "check": False}) not in calls
 
 
 def test_pull_and_resolve_conflicts_detached_head():
@@ -312,7 +312,7 @@ def test_pull_and_resolve_conflicts_detached_head():
             return MagicMock(stdout="")
         if cmd == ["ls-tree", "-r", "HEAD", "--name-only"]:
             return MagicMock(stdout="file.txt\n")
-        if cmd == ["checkout", "HEAD", "--", "--stdin"]:
+        if cmd == ["checkout", "HEAD", "--pathspec-from-file=-"]:
             return MagicMock(stdout="")
         if cmd == ["stash", "drop", "stash@{0}"]:
             return MagicMock(stdout="")

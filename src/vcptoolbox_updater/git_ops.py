@@ -50,23 +50,23 @@ def _parse_untracked_reset_conflicts(stderr: str) -> list[str]:
     Returns:
         List of relative file paths that caused the reset to abort.
     """
-    lines = stderr.splitlines()
     files: list[str] = []
-    in_block = False
-    for line in lines:
+    line_iter = iter(stderr.splitlines())
+
+    # Locate the header that announces the conflict block.
+    for line in line_iter:
+        if "would be overwritten by checkout:" in line.strip():
+            break
+    else:
+        return files
+
+    # Consume indented file paths until a blank or non-indented line.
+    for line in line_iter:
         stripped = line.strip()
-        if "would be overwritten by checkout:" in stripped:
-            in_block = True
-            continue
-        if in_block:
-            if not stripped:
-                break
-            # Git indents file names with a leading tab or spaces.
-            # We only take lines that look like indented file paths.
-            if line.startswith("\t") or line.startswith(" "):
-                files.append(stripped)
-            else:
-                break
+        if not stripped or not line.startswith(("\t", " ")):
+            break
+        files.append(stripped)
+
     return files
 
 

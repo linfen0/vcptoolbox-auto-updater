@@ -137,8 +137,24 @@ class GitOperator:
         self.branch = branch
         self.remote_ref = f"{remote_name}/{branch}"
 
+    def _ensure_git_config(self) -> None:
+        """Configure Git to avoid Windows-specific path and encoding issues.
+
+        Sets *core.longpaths* so that file paths longer than the legacy
+        Windows MAX_PATH limit (260 characters) are handled correctly, and
+        *core.quotepath* so that non-ASCII file names are shown verbatim
+        instead of octal-escaped strings.
+        """
+        for key, value in (("core.longpaths", "true"), ("core.quotepath", "false")):
+            result = _git_run(self.repo_path, ["config", key], check=False)
+            current = result.stdout.strip() if result.returncode == 0 else ""
+            if current != value:
+                _git_run(self.repo_path, ["config", key, value])
+                logger.info("git_config_set", key=key, value=value, previous=current or None)
+
     def fetch(self) -> None:
         """Run ``git fetch <remote_name>`` for the configured remote."""
+        self._ensure_git_config()
         result = _git_run(self.repo_path, ["fetch", self.remote_name])
         logger.info("git_fetch_completed", stdout=result.stdout.strip())
 
@@ -154,15 +170,25 @@ class GitOperator:
         result = _git_run(self.repo_path, ["rev-parse", "--short", ref])
         return result.stdout.strip()
 
-    def check_update_needed(self) -> GitUpdateResult:
-        """Determine whether the local branch is behind the remote.
+    def is_detached_head(self) -> bool:
+        """Check whether the repository is currently in a detached HEAD state.
 
-        The method also handles the "local is ahead" case (no update required).
+        Returns:
+            ``True`` if ``HEAD`` is detached (not pointing to a branch).
+        """
+        result = _git_run(self.repo_path, ["rev-parse", "--abbrev-ref", "HEAD"])
+        return result.stdout.strip() == "HEAD"
+
+    def check_update_needed(self) -> GitUpdateResult:
+        """Determine whether the local HEAD is behind the remote.
+
+        Uses ``HEAD`` (not the branch name) so that detached-HEAD states are
+        compared against the remote correctly.
 
         Returns:
             A :class:`GitUpdateResult` describing the comparison outcome.
         """
-        local_commit = self.get_commit_hash(self.branch)
+        local_commit = self.get_commit_hash("HEAD")
         remote_commit = self.get_commit_hash(self.remote_ref)
 
         if local_commit == remote_commit:
@@ -175,7 +201,7 @@ class GitOperator:
 
         ancestor_result = _git_run(
             self.repo_path,
-            ["merge-base", "is-ancestor", self.remote_ref, self.branch],
+            ["merge-base", "is-ancestor", self.remote_ref, "HEAD"],
             check=False,
         )
         if ancestor_result.returncode == 0:
@@ -189,7 +215,7 @@ class GitOperator:
         try:
             count_result = _git_run(
                 self.repo_path,
-                ["rev-list", "--count", f"{self.branch}..{self.remote_ref}"],
+                ["rev-list", "--count", f"HEAD..{self.remote_ref}"],
             )
             behind_count = int(count_result.stdout.strip())
         except Exception:
@@ -201,6 +227,125 @@ class GitOperator:
             remote_commit=remote_commit,
             message=f"Behind by {behind_count} commit(s).",
         )
+
+    def _stash_local_changes(self) -> str | None:
+        """Stash local tracked changes if any exist.
+
+        Adds all tracked changes to the index and pushes them onto the stash
+        stack when the working tree is dirty with respect to tracked files.
+
+        Returns:
+            Stash reference (e.g. ``"stash@{0}"``) if changes were stashed,
+            otherwise ``None``.
+        """
+        _git_run(self.repo_path, ["add", "-u"])
+        status_result = _git_run(self.repo_path, ["status", "--porcelain"], check=False)
+        has_tracked = any(
+            line and not line.startswith("?")
+            for line in status_result.stdout.strip().splitlines()
+        )
+        if not has_tracked:
+            return None
+        _git_run(self.repo_path, ["stash", "push", "-m", "local"])
+        local_stash = "stash@{0}"
+        logger.info("local_tracked_changes_stashed", stash=local_stash)
+        return local_stash
+
+    def _checkout_branch_if_detached(self) -> None:
+        """Checkout the configured branch when in a detached HEAD state."""
+        if self.is_detached_head():
+            logger.warning("detached_head_checking_out", branch=self.branch)
+            _git_run(self.repo_path, ["checkout", self.branch])
+            logger.info("checked_out_branch", branch=self.branch)
+
+    def _hard_reset_with_retry(self, remote_hash: str) -> None:
+        """Hard-reset to *remote_hash*, removing untracked conflicts once if needed.
+
+        If ``git reset --hard`` aborts because untracked files would be
+        overwritten, the conflicting files are removed and the reset is
+        retried **once**.
+
+        Args:
+            remote_hash: The commit hash to reset to.
+
+        Raises:
+            RuntimeError: If the reset fails for a reason other than untracked
+                file collisions, or if the retry also fails.
+        """
+        reset_result = _git_run(
+            self.repo_path, ["reset", "--hard", remote_hash], check=False
+        )
+        if reset_result.returncode == 0:
+            return
+
+        conflicting = _parse_untracked_reset_conflicts(reset_result.stderr)
+        if conflicting:
+            logger.warning(
+                "reset_blocked_by_untracked_files_removing",
+                file_count=len(conflicting),
+                files=conflicting,
+            )
+            for f in conflicting:
+                abs_path = os.path.join(self.repo_path, f)
+                try:
+                    if os.path.isdir(abs_path) and not os.path.islink(abs_path):
+                        shutil.rmtree(abs_path)
+                    else:
+                        os.remove(abs_path)
+                except Exception as exc:
+                    logger.error(
+                        "failed_to_remove_conflicting_untracked",
+                        file=f,
+                        error=str(exc),
+                    )
+                    raise
+            _git_run(self.repo_path, ["reset", "--hard", remote_hash])
+        else:
+            err_msg = reset_result.stderr.strip() or "(no stderr output)"
+            raise RuntimeError(
+                f"Git command failed in {self.repo_path}: "
+                f"git reset --hard {remote_hash}\n"
+                f"Error: {err_msg}"
+            )
+
+    def _apply_and_reconcile_stash(self, local_stash: str, remote_hash: str) -> None:
+        """Apply the stash and reconcile so only *new* local files survive.
+
+        Modified or deleted files from the stash are reverted to the remote
+        (HEAD) version; added files are kept as-is.  The stash is dropped
+        afterwards.
+
+        Args:
+            local_stash: Reference to the stash to apply (e.g. ``"stash@{0}"``).
+            remote_hash: The commit hash that represents the remote state.
+        """
+        apply_result = _git_run(
+            self.repo_path, ["stash", "apply", local_stash], check=False
+        )
+        if apply_result.returncode != 0:
+            logger.warning(
+                "stash_apply_had_conflicts", stderr=apply_result.stderr.strip()
+            )
+
+        diff_result = _git_run(
+            self.repo_path,
+            ["diff", "--name-only", "--diff-filter=MD", f"{remote_hash}..{local_stash}"],
+            check=False,
+        )
+        files_to_revert = [
+            line.strip()
+            for line in diff_result.stdout.strip().splitlines()
+            if line.strip()
+        ]
+        if files_to_revert:
+            logger.info(
+                "reverting_stash_changes_to_remote",
+                file_count=len(files_to_revert),
+                files=files_to_revert,
+            )
+            _git_run(self.repo_path, ["checkout", "HEAD", "--", *files_to_revert])
+
+        _git_run(self.repo_path, ["stash", "drop", local_stash])
 
     def pull_and_resolve_conflicts(self) -> GitUpdateResult:
         """Synchronise the local branch to the remote state.
@@ -221,87 +366,13 @@ class GitOperator:
         """
         pre_local = self.get_commit_hash("HEAD")
         self.fetch()
-
         remote_hash = self.get_commit_hash(self.remote_ref)
 
-        # 1. Stash local tracked changes if any (before checkout to preserve detached-HEAD changes)
-        _git_run(self.repo_path, ["add", "-u"])
-        status_result = _git_run(self.repo_path, ["status", "--porcelain"], check=False)
-        has_tracked = any(
-            line and not line.startswith("?")
-            for line in status_result.stdout.strip().splitlines()
-        )
-        local_stash = None
-        if has_tracked:
-            _git_run(self.repo_path, ["stash", "push", "-m", "local"])
-            local_stash = "stash@{0}"
-            logger.info("local_tracked_changes_stashed", stash=local_stash)
-
-        # 2. Detached HEAD -> checkout branch first
-        head_ref = _git_run(self.repo_path, ["rev-parse", "--abbrev-ref", "HEAD"])
-        if head_ref.stdout.strip() == "HEAD":
-            logger.warning("detached_head_checking_out", branch=self.branch)
-            _git_run(self.repo_path, ["checkout", self.branch])
-            logger.info("checked_out_branch", branch=self.branch)
-
-        # 3. Hard reset to remote; if blocked by untracked files, remove and retry
-        reset_result = _git_run(self.repo_path, ["reset", "--hard", remote_hash], check=False)
-        if reset_result.returncode != 0:
-            conflicting = _parse_untracked_reset_conflicts(reset_result.stderr)
-            if conflicting:
-                logger.warning(
-                    "reset_blocked_by_untracked_files_removing",
-                    file_count=len(conflicting),
-                    files=conflicting,
-                )
-                for f in conflicting:
-                    abs_path = os.path.join(self.repo_path, f)
-                    try:
-                        if os.path.isdir(abs_path) and not os.path.islink(abs_path):
-                            shutil.rmtree(abs_path)
-                        else:
-                            os.remove(abs_path)
-                    except Exception as exc:
-                        logger.error(
-                            "failed_to_remove_conflicting_untracked",
-                            file=f,
-                            error=str(exc),
-                        )
-                        raise
-                _git_run(self.repo_path, ["reset", "--hard", remote_hash])
-            else:
-                err_msg = reset_result.stderr.strip() or "(no stderr output)"
-                raise RuntimeError(
-                    f"Git command failed in {self.repo_path}: "
-                    f"git reset --hard {remote_hash}\n"
-                    f"Error: {err_msg}"
-                )
-
-        # 4. If we stashed changes, apply and reconcile: keep only *new* files from stash
+        local_stash = self._stash_local_changes()
+        self._checkout_branch_if_detached()
+        self._hard_reset_with_retry(remote_hash)
         if local_stash:
-            apply_result = _git_run(self.repo_path, ["stash", "apply", local_stash], check=False)
-            if apply_result.returncode != 0:
-                logger.warning("stash_apply_had_conflicts", stderr=apply_result.stderr.strip())
-
-            diff_result = _git_run(
-                self.repo_path,
-                ["diff", "--name-only", "--diff-filter=MD", f"{remote_hash}..{local_stash}"],
-                check=False,
-            )
-            files_to_revert = [
-                line.strip()
-                for line in diff_result.stdout.strip().splitlines()
-                if line.strip()
-            ]
-            if files_to_revert:
-                logger.info(
-                    "reverting_stash_changes_to_remote",
-                    file_count=len(files_to_revert),
-                    files=files_to_revert,
-                )
-                _git_run(self.repo_path, ["checkout", "HEAD", "--", *files_to_revert])
-
-            _git_run(self.repo_path, ["stash", "drop", local_stash])
+            self._apply_and_reconcile_stash(local_stash, remote_hash)
 
         post_local = self.get_commit_hash(self.branch)
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 
 import click
 
@@ -169,7 +170,9 @@ def execute_update(config_path: str, service_mode: bool = False) -> UpdateReport
 def update(ctx: click.Context) -> None:
     """Manually trigger a single update cycle now."""
     config_path = ctx.obj["config_path"]
+    t0 = time.perf_counter()
     report = execute_update(config_path)
+    elapsed = time.perf_counter() - t0
     if report.success:
         if "Error:" in report.message:
             click.echo(report.message)
@@ -178,6 +181,7 @@ def update(ctx: click.Context) -> None:
             click.echo(f"PM2: {report.pm2_output}")
     else:
         click.echo(f"Update failed: {report.message}", err=True)
+    click.echo(f"Time elapsed: {elapsed:.3f}s")
 
 
 def main() -> None:

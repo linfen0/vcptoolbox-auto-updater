@@ -15,6 +15,22 @@ def test_get_commit_hash():
         mock_run.assert_called_once_with("/tmp/repo", ["rev-parse", "--short", "main"])
 
 
+def test_is_detached_head_true():
+    op = GitOperator("/tmp/repo", "origin", "main")
+    with patch.object(git_ops, "_git_run") as mock_run:
+        mock_run.return_value = MagicMock(stdout="HEAD\n")
+        assert op.is_detached_head() is True
+        mock_run.assert_called_once_with("/tmp/repo", ["rev-parse", "--abbrev-ref", "HEAD"])
+
+
+def test_is_detached_head_false():
+    op = GitOperator("/tmp/repo", "origin", "main")
+    with patch.object(git_ops, "_git_run") as mock_run:
+        mock_run.return_value = MagicMock(stdout="main\n")
+        assert op.is_detached_head() is False
+        mock_run.assert_called_once_with("/tmp/repo", ["rev-parse", "--abbrev-ref", "HEAD"])
+
+
 def test_check_update_needed_no_update_same_commit():
     op = GitOperator("/tmp/repo", "origin", "main")
     with patch.object(op, "get_commit_hash", return_value="abc1234"):
@@ -27,7 +43,11 @@ def test_check_update_needed_local_ahead():
     op = GitOperator("/tmp/repo", "origin", "main")
 
     def commit_hash_side_effect(ref):
-        return "local5678" if ref == "main" else "remote1234"
+        if ref == "HEAD":
+            return "local5678"
+        if ref == "origin/main":
+            return "remote1234"
+        return "abc1234"
 
     with patch.object(op, "get_commit_hash", side_effect=commit_hash_side_effect), \
          patch.object(git_ops, "_git_run", return_value=MagicMock(returncode=0)) as mock_run:
@@ -35,7 +55,7 @@ def test_check_update_needed_local_ahead():
         assert not result.updated
         assert result.message == "Local is ahead of remote. No update needed."
         mock_run.assert_called_once_with(
-            "/tmp/repo", ["merge-base", "is-ancestor", "origin/main", "main"], check=False
+            "/tmp/repo", ["merge-base", "is-ancestor", "origin/main", "HEAD"], check=False
         )
 
 
@@ -43,12 +63,16 @@ def test_check_update_needed_local_behind():
     op = GitOperator("/tmp/repo", "origin", "main")
 
     def commit_hash_side_effect(ref):
-        return "local1234" if ref == "main" else "remote5678"
+        if ref == "HEAD":
+            return "local1234"
+        if ref == "origin/main":
+            return "remote5678"
+        return "abc1234"
 
     def run_side_effect(repo_path, cmd, **kwargs):
-        if cmd == ["merge-base", "is-ancestor", "origin/main", "main"]:
+        if cmd == ["merge-base", "is-ancestor", "origin/main", "HEAD"]:
             return MagicMock(returncode=1)
-        if cmd == ["rev-list", "--count", "main..origin/main"]:
+        if cmd == ["rev-list", "--count", "HEAD..origin/main"]:
             return MagicMock(stdout="3")
         return MagicMock()
 
@@ -63,12 +87,16 @@ def test_check_update_needed_diverged():
     op = GitOperator("/tmp/repo", "origin", "main")
 
     def commit_hash_side_effect(ref):
-        return "local1234" if ref == "main" else "remote5678"
+        if ref == "HEAD":
+            return "local1234"
+        if ref == "origin/main":
+            return "remote5678"
+        return "abc1234"
 
     def run_side_effect(repo_path, cmd, **kwargs):
-        if cmd == ["merge-base", "is-ancestor", "origin/main", "main"]:
+        if cmd == ["merge-base", "is-ancestor", "origin/main", "HEAD"]:
             return MagicMock(returncode=1)
-        if cmd == ["rev-list", "--count", "main..origin/main"]:
+        if cmd == ["rev-list", "--count", "HEAD..origin/main"]:
             return MagicMock(stdout="2")
         return MagicMock()
 
@@ -83,7 +111,7 @@ def test_fetch():
     op = GitOperator("/tmp/repo", "origin", "main")
     with patch.object(git_ops, "_git_run", return_value=MagicMock(stdout="fetch output")) as mock_run:
         op.fetch()
-        mock_run.assert_called_once_with("/tmp/repo", ["fetch", "origin"])
+        mock_run.assert_any_call("/tmp/repo", ["fetch", "origin"])
 
 
 def test_pull_and_resolve_conflicts_no_update():
@@ -262,8 +290,6 @@ def test_pull_and_resolve_conflicts_detached_head():
     op = GitOperator("/tmp/repo", "origin", "main")
 
     def run_side_effect(repo_path, cmd, **kwargs):
-        if cmd == ["rev-parse", "--abbrev-ref", "HEAD"]:
-            return MagicMock(stdout="HEAD")
         if cmd == ["checkout", "main"]:
             return MagicMock(stdout="")
         if cmd == ["status", "--porcelain"]:
@@ -296,6 +322,7 @@ def test_pull_and_resolve_conflicts_detached_head():
         return "def5678"
 
     with patch.object(op, "fetch") as mock_fetch, \
+         patch.object(op, "is_detached_head", return_value=True), \
          patch.object(git_ops, "_git_run", side_effect=run_side_effect) as mock_run, \
          patch.object(op, "get_commit_hash", side_effect=commit_hash_side_effect):
         result = op.pull_and_resolve_conflicts()

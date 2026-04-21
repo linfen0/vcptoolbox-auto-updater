@@ -216,7 +216,7 @@ notifications:
 - **异常处理**：服务主循环中的异常会被捕获并记录到 EventLog，随后抛出以触发 Windows Service 的故障恢复机制。
 - **文档同步**：每次对代码进行**显著功能变更**（如新增配置项、修改同步策略、变更 CLI 命令、调整通知通道等），必须同步更新 `README.md` 中的对应说明，并随代码变更一起提交并推送至 Git。禁止仅修改代码而遗漏文档。
 
-## 实测验证记录
+## 实测验证记录 
 
 以下测试于 `2026-04-20` 在环境 `F:\AI_Study_studio\VCPToolBox\vcptoolbox-auto-updater` 执行，使用命令：
 ```powershell

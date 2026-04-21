@@ -12,7 +12,7 @@ import win32serviceutil
 
 from vcptoolbox_updater.config import load_config
 from vcptoolbox_updater.git_ops import GitOperator
-from vcptoolbox_updater.notifications import UpdateReport, build_notifiers
+from vcptoolbox_updater.update_report import UpdateReport
 from vcptoolbox_updater.pm2_ops import Pm2Operator
 from vcptoolbox_updater.scheduler import UpdateScheduler
 from vcptoolbox_updater.utils import configure_logging, get_logger
@@ -83,6 +83,8 @@ class AutoUpdaterService(win32serviceutil.ServiceFramework):
             pm2_bin=cfg.pm2.pm2_bin,
             pm2_cfg=cfg.pm2,
         )
+        from vcptoolbox_updater.notifications import build_notifiers
+
         notifiers = build_notifiers(cfg.notifications)
 
         def job() -> None:

@@ -87,13 +87,19 @@ class GitUpdateResult:
     message: str
 
 
-def _git_run(repo_path: str, cmd: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
+def _git_run(
+    repo_path: str,
+    cmd: list[str],
+    check: bool = True,
+    input: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     """Execute a git sub-process and return its result.
 
     Args:
         repo_path: Path to the git repository (used as *cwd*).
         cmd: Git sub-command arguments (e.g. ``["fetch", "origin"]``).
         check: When ``True`` (default), raise ``RuntimeError`` on non-zero exit.
+        input: Optional string to feed to the command's standard input.
 
     Returns:
         The completed process object.
@@ -103,6 +109,12 @@ def _git_run(repo_path: str, cmd: list[str], check: bool = True) -> subprocess.C
     """
     full_cmd = ["git", *cmd]
     logger.debug("running_git_command", command=" ".join(full_cmd), cwd=repo_path)
+    # Force English output so that stderr parsing (e.g. untracked conflict
+    # detection) is locale-independent.
+    env = os.environ.copy()
+    env["LC_ALL"] = "C"
+    env["LANG"] = "C"
+    env["LANGUAGE"] = "en"
     result = subprocess.run(
         full_cmd,
         cwd=repo_path,
@@ -110,6 +122,8 @@ def _git_run(repo_path: str, cmd: list[str], check: bool = True) -> subprocess.C
         text=True,
         encoding="utf-8",
         check=False,
+        input=input,
+        env=env,
     )
     if check and result.returncode != 0:
         err_msg = result.stderr.strip() or "(no stderr output)"
@@ -312,8 +326,9 @@ class GitOperator:
         """Apply the stash and reconcile so only *new* local files survive.
 
         Modified or deleted files from the stash are reverted to the remote
-        (HEAD) version; added files are kept as-is.  The stash is dropped
-        afterwards.
+        (HEAD) version; added files are kept as-is.  Tree conflicts are
+        resolved by taking the HEAD version (or removing the file if it does
+        not exist in HEAD).  The stash is dropped afterwards.
 
         Args:
             local_stash: Reference to the stash to apply (e.g. ``"stash@{0}"``).
@@ -327,23 +342,70 @@ class GitOperator:
                 "stash_apply_had_conflicts", stderr=apply_result.stderr.strip()
             )
 
-        diff_result = _git_run(
+        # Gather all files that should be reverted to HEAD (modified/deleted
+        # from the stash plus any unmerged files caused by tree conflicts).
+        md_result = _git_run(
             self.repo_path,
             ["diff", "--name-only", "--diff-filter=MD", f"{remote_hash}..{local_stash}"],
             check=False,
         )
-        files_to_revert = [
+        u_result = _git_run(
+            self.repo_path,
+            ["diff", "--name-only", "--diff-filter=U"],
+            check=False,
+        )
+        files_to_revert = {
             line.strip()
-            for line in diff_result.stdout.strip().splitlines()
+            for line in md_result.stdout.strip().splitlines()
             if line.strip()
-        ]
-        if files_to_revert:
+        }
+        unmerged_files = {
+            line.strip()
+            for line in u_result.stdout.strip().splitlines()
+            if line.strip()
+        }
+        all_files = files_to_revert | unmerged_files
+
+        if not all_files:
+            _git_run(self.repo_path, ["stash", "drop", local_stash])
+            return
+
+        # Determine which files actually exist in HEAD so we never attempt an
+        # illegal ``git checkout HEAD --`` on a path that is not present.
+        head_result = _git_run(
+            self.repo_path,
+            ["ls-tree", "-r", "HEAD", "--name-only"],
+            check=False,
+        )
+        head_files = set(head_result.stdout.strip().splitlines())
+
+        checkout_files = sorted(f for f in all_files if f in head_files)
+        if checkout_files:
             logger.info(
                 "reverting_stash_changes_to_remote",
-                file_count=len(files_to_revert),
-                files=files_to_revert,
+                file_count=len(checkout_files),
+                files=checkout_files,
             )
-            _git_run(self.repo_path, ["checkout", "HEAD", "--", *files_to_revert])
+            _git_run(
+                self.repo_path,
+                ["checkout", "HEAD", "--", "--stdin"],
+                input="\n".join(checkout_files),
+            )
+
+        # Unmerged files that do not exist in HEAD must be removed to clear
+        # the conflict state.
+        to_remove = sorted(f for f in unmerged_files if f not in head_files)
+        if to_remove:
+            logger.info(
+                "removing_unmerged_files_not_in_head",
+                file_count=len(to_remove),
+                files=to_remove,
+            )
+            _git_run(
+                self.repo_path,
+                ["rm", "-f", "--ignore-unmatch", *to_remove],
+                check=False,
+            )
 
         _git_run(self.repo_path, ["stash", "drop", local_stash])
 
@@ -377,7 +439,7 @@ class GitOperator:
         post_local = self.get_commit_hash(self.branch)
 
         if pre_local == post_local:
-            return GitUpdateResult(
+            return GitUpdateResult( 
                 updated=False,
                 local_commit=pre_local,
                 remote_commit=post_local,

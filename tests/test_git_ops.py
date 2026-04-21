@@ -258,7 +258,7 @@ def test_pull_and_resolve_conflicts_new_local_files_kept():
 
 
 def test_pull_and_resolve_conflicts_detached_head():
-    """Detached HEAD should be detected and checked out before syncing."""
+    """Detached HEAD with local changes: stash first, then checkout, then sync."""
     op = GitOperator("/tmp/repo", "origin", "main")
 
     def run_side_effect(repo_path, cmd, **kwargs):
@@ -267,6 +267,18 @@ def test_pull_and_resolve_conflicts_detached_head():
         if cmd == ["checkout", "main"]:
             return MagicMock(stdout="")
         if cmd == ["status", "--porcelain"]:
+            return MagicMock(stdout=" M file.txt\n")
+        if cmd == ["add", "-u"]:
+            return MagicMock(stdout="")
+        if cmd == ["stash", "push", "-m", "local"]:
+            return MagicMock(stdout="")
+        if cmd == ["stash", "apply", "stash@{0}"]:
+            return MagicMock(stdout="", returncode=0)
+        if cmd == ["diff", "--name-only", "--diff-filter=MD", "def5678..stash@{0}"]:
+            return MagicMock(stdout="file.txt\n")
+        if cmd == ["checkout", "HEAD", "--", "file.txt"]:
+            return MagicMock(stdout="")
+        if cmd == ["stash", "drop", "stash@{0}"]:
             return MagicMock(stdout="")
         if cmd == ["rev-parse", "--short", "origin/main"]:
             return MagicMock(stdout="def5678")
@@ -274,8 +286,6 @@ def test_pull_and_resolve_conflicts_detached_head():
             return MagicMock(stdout="abc1234")
         if cmd == ["rev-parse", "--short", "main"]:
             return MagicMock(stdout="def5678")
-        if cmd == ["add", "-u"]:
-            return MagicMock(stdout="")
         if cmd == ["reset", "--hard", "def5678"]:
             return MagicMock(stdout="", returncode=0)
         return MagicMock(stdout="")
@@ -290,6 +300,10 @@ def test_pull_and_resolve_conflicts_detached_head():
          patch.object(op, "get_commit_hash", side_effect=commit_hash_side_effect):
         result = op.pull_and_resolve_conflicts()
         assert result.updated
+        calls = [c.args for c in mock_run.call_args_list]
+        stash_idx = calls.index(("/tmp/repo", ["stash", "push", "-m", "local"]))
+        checkout_idx = calls.index(("/tmp/repo", ["checkout", "main"]))
+        assert stash_idx < checkout_idx, "stash must happen before checkout in detached HEAD"
         mock_run.assert_any_call("/tmp/repo", ["checkout", "main"])
         mock_run.assert_any_call("/tmp/repo", ["reset", "--hard", "def5678"], check=False)
 

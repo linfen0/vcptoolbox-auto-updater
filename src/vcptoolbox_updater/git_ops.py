@@ -224,14 +224,7 @@ class GitOperator:
 
         remote_hash = self.get_commit_hash(self.remote_ref)
 
-        # Detached HEAD -> checkout branch first
-        head_ref = _git_run(self.repo_path, ["rev-parse", "--abbrev-ref", "HEAD"])
-        if head_ref.stdout.strip() == "HEAD":
-            logger.warning("detached_head_checking_out", branch=self.branch)
-            _git_run(self.repo_path, ["checkout", self.branch])
-            logger.info("checked_out_branch", branch=self.branch)
-
-        # 1. Stash local tracked changes if any
+        # 1. Stash local tracked changes if any (before checkout to preserve detached-HEAD changes)
         _git_run(self.repo_path, ["add", "-u"])
         status_result = _git_run(self.repo_path, ["status", "--porcelain"], check=False)
         has_tracked = any(
@@ -244,7 +237,14 @@ class GitOperator:
             local_stash = "stash@{0}"
             logger.info("local_tracked_changes_stashed", stash=local_stash)
 
-        # 2. Hard reset to remote; if blocked by untracked files, remove and retry
+        # 2. Detached HEAD -> checkout branch first
+        head_ref = _git_run(self.repo_path, ["rev-parse", "--abbrev-ref", "HEAD"])
+        if head_ref.stdout.strip() == "HEAD":
+            logger.warning("detached_head_checking_out", branch=self.branch)
+            _git_run(self.repo_path, ["checkout", self.branch])
+            logger.info("checked_out_branch", branch=self.branch)
+
+        # 3. Hard reset to remote; if blocked by untracked files, remove and retry
         reset_result = _git_run(self.repo_path, ["reset", "--hard", remote_hash], check=False)
         if reset_result.returncode != 0:
             conflicting = _parse_untracked_reset_conflicts(reset_result.stderr)
@@ -277,7 +277,7 @@ class GitOperator:
                     f"Error: {err_msg}"
                 )
 
-        # 3. If we stashed changes, apply and reconcile: keep only *new* files from stash
+        # 4. If we stashed changes, apply and reconcile: keep only *new* files from stash
         if local_stash:
             apply_result = _git_run(self.repo_path, ["stash", "apply", local_stash], check=False)
             if apply_result.returncode != 0:

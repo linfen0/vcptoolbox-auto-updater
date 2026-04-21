@@ -41,12 +41,18 @@ def test_restart_no_config_raises():
         op.restart()
 
 
-def test_kill():
-    op = pm2_ops.Pm2Operator(pm2_bin="pm2")
-    with patch.object(pm2_ops, "_run_pm2", return_value="[PM2] kill all processes") as mock_run:
-        output = op.kill()
-        mock_run.assert_called_once_with("pm2", ["kill"])
-        assert output == "[PM2] kill all processes"
+def test_stop():
+    cfg = Pm2Config(processes=[
+        Pm2ProcessConfig(name="vcp-main", script="server.js"),
+        Pm2ProcessConfig(name="vcp-admin", script="adminServer.js"),
+    ])
+    op = pm2_ops.Pm2Operator(pm2_bin="pm2", pm2_cfg=cfg)
+    with patch.object(pm2_ops, "_run_pm2", return_value="[PM2] vcp-main stopped") as mock_run:
+        output = op.stop()
+        assert mock_run.call_count == 2
+        mock_run.assert_any_call("pm2", ["stop", "vcp-main"], check=False)
+        mock_run.assert_any_call("pm2", ["stop", "vcp-admin"], check=False)
+        assert output == "[PM2] vcp-main stopped\n[PM2] vcp-main stopped"
 
 
 def test_save():

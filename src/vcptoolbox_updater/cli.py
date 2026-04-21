@@ -119,7 +119,7 @@ def execute_update(config_path: str, service_mode: bool = False) -> UpdateReport
                 message="No new commits on remote.",
             )
         else:
-            pm2_op.kill()
+            pm2_op.stop()
             try:
                 sync_result = git_op.pull_and_resolve_conflicts()
                 pm2_output = pm2_op.restart(cwd=str(cfg.repo_path))

@@ -21,7 +21,7 @@ def _find_pm2() -> str:
     return pm2
 
 
-def _run_pm2(pm2_bin: str, args: list[str], cwd: str | None = None) -> str:
+def _run_pm2(pm2_bin: str, args: list[str], cwd: str | None = None, check: bool = True) -> str:
     cmd = [pm2_bin, *args]
     logger.debug("running_pm2_command", command=" ".join(cmd))
     result = subprocess.run(
@@ -30,8 +30,13 @@ def _run_pm2(pm2_bin: str, args: list[str], cwd: str | None = None) -> str:
         capture_output=True,
         text=True,
         encoding="utf-8",
-        check=True,
+        check=False,
     )
+    if check and result.returncode != 0:
+        err_msg = result.stderr.strip() or "(no stderr output)"
+        raise RuntimeError(
+            f"PM2 command failed: {' '.join(cmd)}\nError: {err_msg}"
+        )
     return result.stdout.strip()
 
 
@@ -64,10 +69,28 @@ class Pm2Operator:
         ecosystem = self.pm2_cfg.to_ecosystem_dict(default_cwd=cwd)
         return _start_or_restart(self.pm2_bin, ecosystem, cwd=cwd)
 
-    def kill(self) -> str:
-        stdout = _run_pm2(self.pm2_bin, ["kill"])
-        logger.info("pm2_kill_completed", stdout=stdout)
-        return stdout
+    def stop(self) -> str:
+        """Gracefully stop all configured PM2 processes.
+
+        Processes that are not currently running are silently ignored.
+
+        Returns:
+            Combined stdout from the stop commands.
+
+        Raises:
+            RuntimeError: If no PM2 processes are configured.
+        """
+        if not self.pm2_cfg or not self.pm2_cfg.processes:
+            raise RuntimeError("No PM2 processes configured.")
+
+        outputs: list[str] = []
+        for proc in self.pm2_cfg.processes:
+            stdout = _run_pm2(self.pm2_bin, ["stop", proc.name], check=False)
+            if stdout:
+                outputs.append(stdout)
+                logger.info("pm2_stop_process", process=proc.name, stdout=stdout)
+        logger.info("pm2_stop_completed")
+        return "\n".join(outputs)
 
     def save(self) -> None:
         _run_pm2(self.pm2_bin, ["save"])

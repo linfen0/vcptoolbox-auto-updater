@@ -59,7 +59,7 @@ def test_cli_update_no_update():
         result = runner.invoke(cli, ["--config", "/tmp/cfg.yaml", "update"])
         assert result.exit_code == 0
         assert "No new commits on remote" in result.output
-        mock_pm2_op.kill.assert_not_called()
+        mock_pm2_op.stop.assert_not_called()
 
 
 def test_cli_update_with_update():
@@ -89,7 +89,7 @@ def test_cli_update_with_update():
         result = runner.invoke(cli, ["--config", "/tmp/cfg.yaml", "update"])
         assert result.exit_code == 0
         assert "Updated" in result.output
-        mock_pm2_op.kill.assert_called_once()
+        mock_pm2_op.stop.assert_called_once()
         mock_pm2_op.restart.assert_called_once_with(cwd=str(Path("/tmp/repo")))
 
 
@@ -113,4 +113,4 @@ def test_cli_update_failure():
         result = runner.invoke(cli, ["--config", "/tmp/cfg.yaml", "update"])
         assert result.exit_code == 0
         assert "Update failed" in result.output
-        mock_pm2_op.kill.assert_called_once()
+        mock_pm2_op.stop.assert_called_once()

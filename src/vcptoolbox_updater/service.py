@@ -134,7 +134,7 @@ class AutoUpdaterService(win32serviceutil.ServiceFramework):
                     branch=cfg.git.branch,
                     from_commit=git_result.local_commit,
                     to_commit=git_result.remote_commit,
-                    pm2_process=", ".join(p.name for p in cfg.pm2.processes),
+                    pm2_process=", ".join(p.name for p in cfg.pm2.processes ),
                     pm2_output="No restart needed.",
                     message="No new commits on remote.",
                 )

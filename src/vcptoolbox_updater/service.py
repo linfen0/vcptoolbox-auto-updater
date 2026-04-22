@@ -24,6 +24,8 @@ class AutoUpdaterService(win32serviceutil.ServiceFramework):
     _svc_name_ = "VCPToolBoxAutoUpdater"
     _svc_display_name_ = "VCP ToolBox Auto Updater"
     _svc_description_ = "Automatically pulls VCPToolBox updates and restarts PM2 process."
+    _exe_name_ = sys.executable
+    _exe_args_ = "-m vcptoolbox_updater service"
 
     def __init__(self, args: list[str]) -> None:
         win32serviceutil.ServiceFramework.__init__(self, args)
@@ -39,7 +41,14 @@ class AutoUpdaterService(win32serviceutil.ServiceFramework):
         if getattr(sys, "frozen", False):
             base_dir = os.path.dirname(sys.executable)
         else:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
+            pkg_dir = os.path.dirname(os.path.abspath(__file__))
+            parent = os.path.dirname(pkg_dir)
+            # Editable install:  src/vcptoolbox_updater/ -> project root
+            if os.path.basename(parent) == "src":
+                base_dir = os.path.dirname(parent)
+            else:
+                # Installed wheel: use package directory
+                base_dir = pkg_dir
         return os.path.join(base_dir, "config.yaml")
 
     def SvcStop(self) -> None:

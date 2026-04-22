@@ -9,6 +9,7 @@ from textual.app import ComposeResult
 from textual.containers import Container, Vertical
 from textual.screen import Screen
 from textual.widgets import Button, RichLog, Static
+from textual.worker import Worker
 
 from vcptoolbox_updater.cli import _resolve_config_path
 from vcptoolbox_updater.tui.i18n import _
@@ -62,7 +63,7 @@ class ManualUpdate(Screen[None]):
 
     def __init__(self) -> None:
         super().__init__()
-        self._running = False
+        self._update_running = False
 
     def compose(self) -> ComposeResult:
         with Container(id="update-card"):
@@ -88,14 +89,14 @@ class ManualUpdate(Screen[None]):
             self.app.pop_screen()
             return
         if button_id == "btn_run":
-            if self._running:
+            if self._update_running:
                 self.notify(_("status_running"), severity="warning")
                 return
-            self._running = True
+            self._update_running = True
             log_widget = self.query_one("#log", RichLog)
             log_widget.clear()
             log_widget.write(_("update_starting"))
-            asyncio.create_task(self._run_update())
+            self.run_worker(self._run_update, name="manual_update", group="update")
 
     async def _run_update(self) -> None:
         log_widget = self.query_one("#log", RichLog)
@@ -108,10 +109,20 @@ class ManualUpdate(Screen[None]):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await proc.communicate()
-            output = (stdout + stderr).decode("utf-8", errors="replace")
-            for line in output.strip().splitlines():
-                log_widget.write(line)
+
+            async def _read_stream(stream: asyncio.StreamReader) -> None:
+                while True:
+                    line = await stream.readline()
+                    if not line:
+                        break
+                    log_widget.write(line.decode("utf-8", errors="replace").rstrip("\n"))
+
+            await asyncio.gather(
+                _read_stream(proc.stdout),
+                _read_stream(proc.stderr),
+            )
+            await proc.wait()
+
             if proc.returncode == 0:
                 self.notify(_("update_success", message="更新完成"), severity="information")
             else:
@@ -121,4 +132,9 @@ class ManualUpdate(Screen[None]):
             log_widget.write(_("update_fail", message=str(exc)))
             self.notify(str(exc), severity="error")
         finally:
-            self._running = False
+            self._update_running = False
+
+    def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+        """Reset running flag if worker finishes in any terminal state."""
+        if event.worker.name == "manual_update" and event.state.name in ("SUCCESS", "ERROR", "CANCELLED"):
+            self._update_running = False
